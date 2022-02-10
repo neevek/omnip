@@ -1,5 +1,5 @@
-use log::error;
-use std::{collections::HashMap, net::SocketAddr};
+use log::{debug, error};
+use std::collections::HashMap;
 use url::Url;
 
 pub struct HttpRequest {
@@ -7,6 +7,7 @@ pub struct HttpRequest {
     url: String,
     version: String,
     headers: HashMap<String, String>,
+    pub header_len: usize,
 }
 
 impl HttpRequest {
@@ -14,41 +15,49 @@ impl HttpRequest {
         self.method.starts_with("CONNECT")
     }
 
-    pub fn get_socket_addr(&self) -> Option<SocketAddr> {
-        let mut host = None;
-        if let Some(h) = self.headers.get("host") {
-            host = Some(h.to_string());
+    pub fn get_request_addr(&self) -> Option<String> {
+        if self.is_connect_request() {
+            // url is the address, host:port is assumed
+            return Some(self.url.clone());
         }
 
-        if host.is_none() {
-            let url = Url::parse(&self.url).ok()?;
-            if let Some(port) = url.port() {
-                host = Some(format!("{}:{}", url.host_str()?, port));
-            } else {
-                host = Some(url.host_str()?.to_string());
+        debug!("will parse url first: {}", self.url);
+        let url = Url::parse(&self.url);
+        if let Some(url) = url.ok() {
+            if url.scheme().starts_with("http") {
+                let addr: String;
+                if let Some(port) = url.port() {
+                    addr = format!("{}:{}", url.host_str()?, port).to_string();
+                } else {
+                    addr = format!(
+                        "{}:{}",
+                        url.host_str()?,
+                        if url.scheme().starts_with("https") {
+                            443
+                        } else {
+                            80
+                        }
+                    )
+                    .to_string();
+                }
+
+                return Some(addr);
             }
-        } else {
-            let start_pos = if let Some(ipv6_end_bracket_pos) = host.as_ref()?.rfind("]") {
+        }
+
+        if let Some(host) = self.headers.get("host") {
+            let start_pos = if let Some(ipv6_end_bracket_pos) = host.rfind("]") {
                 ipv6_end_bracket_pos
             } else {
                 0
             };
 
-            if host.as_ref()?[start_pos..].find(":").is_none() {
-                host = Some(format!(
-                    "{}:{}",
-                    host?,
-                    if self.url.to_lowercase().starts_with("http://") {
-                        80
-                    } else {
-                        443
-                    }
-                ));
+            if host[start_pos..].find(":").is_some() {
+                return Some(host.to_string());
             }
         }
-
-        // TODO we cannot return SocketAddr here, host may be a domain, which we need to resolve first
-        host?.parse().ok()
+        error!("invalid request");
+        None
     }
 }
 
@@ -76,16 +85,10 @@ pub fn parse(buffer: &str) -> Option<HttpRequest> {
             url = parts[1];
             version = parts[2];
         } else {
-            if part.is_empty() {
-                continue;
-            }
-
-            let header_key_value: Vec<&str> = part.split(":").collect();
-            if header_key_value.len() == 2 {
-                headers.insert(
-                    header_key_value[1].to_lowercase().to_string(),
-                    header_key_value[1].to_string(),
-                );
+            if let Some(colon_pos) = part.find(":") {
+                let k = part[0..colon_pos].trim().to_lowercase();
+                let v = part[(colon_pos + 1)..].trim().to_string();
+                headers.insert(k, v);
             }
         }
     }
@@ -95,6 +98,7 @@ pub fn parse(buffer: &str) -> Option<HttpRequest> {
         url: url.to_string(),
         version: version.to_string(),
         headers,
+        header_len: buffer.len() + 4, // 4 for the trailing \r\n\r\n
     });
 }
 
