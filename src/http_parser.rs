@@ -15,6 +15,10 @@ impl HttpRequest {
         self.method.starts_with("CONNECT")
     }
 
+    pub fn get_proxy_connection_header(&self) -> Option<&String> {
+        self.headers.get("Proxy-Connection")
+    }
+
     pub fn get_request_addr(&self) -> Option<String> {
         if self.is_connect_request() {
             // url is the address, host:port is assumed
@@ -98,7 +102,7 @@ pub fn parse(buffer: &str) -> Option<HttpRequest> {
         url: url.to_string(),
         version: version.to_string(),
         headers,
-        header_len: buffer.len() + 4, // 4 for the trailing \r\n\r\n
+        header_len: buffer.len(),
     });
 }
 

@@ -1,7 +1,7 @@
 use crate::{http_parser, BufferPool};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::net::SocketAddr;
 use std::str;
 use std::sync::Mutex;
@@ -15,14 +15,14 @@ use tokio::{
 const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\nServer: rsp\r\n\r\n";
+//const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\nServer: rsp\r\n\r\n";
 const MAX_PENDING_REQUEST_BYTES: usize = 1024 * 128;
 
 #[derive(Debug)]
 pub enum ProxyError {
     BadRequest,
     PayloadTooLarge,
-    BadGateway,
+    BadGateway(anyhow::Error),
     Disconnected(anyhow::Error),
 }
 
@@ -31,15 +31,17 @@ pub struct Server {
     tcp_listener: Option<TcpListener>,
     buffer_pool: BufferPool,
     is_running: Mutex<bool>,
+    downstream_addr: Option<SocketAddr>,
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr) -> Self {
+    pub fn new(addr: SocketAddr, downstream_addr: Option<SocketAddr>) -> Self {
         Server {
             addr,
             tcp_listener: None,
             buffer_pool: crate::new_buffer_pool(),
             is_running: Mutex::new(false),
+            downstream_addr,
         }
     }
 
@@ -66,7 +68,7 @@ impl Server {
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
             match listener.accept().await {
-                Ok((tcp_stream, addr)) => {
+                Ok((upstream, addr)) => {
                     if !*self.is_running.lock().unwrap() {
                         info!("proxy server quit");
                         break;
@@ -74,11 +76,12 @@ impl Server {
 
                     debug!("received connection, addr: {}", addr);
                     let buffer_pool = self.buffer_pool.clone();
+                    let downstream_addr = self.downstream_addr.clone();
                     tokio::spawn(async move {
-                        Self::process_stream(buffer_pool, tcp_stream)
+                        Self::process_stream(buffer_pool, upstream, downstream_addr)
                             .await
                             .map_err(|e| match e {
-                                ProxyError::BadRequest | ProxyError::BadGateway => {
+                                ProxyError::BadRequest | ProxyError::BadGateway(_) => {
                                     error!("{:?}", e);
                                 }
                                 _ => {}
@@ -89,6 +92,7 @@ impl Server {
 
                 Err(e) => {
                     error!("access server failed, err: {}", e);
+                    break;
                 }
             }
         }
@@ -99,11 +103,10 @@ impl Server {
     pub async fn process_stream(
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
+        downstream_addr: Option<SocketAddr>,
     ) -> Result<(), ProxyError> {
         let mut buf = buffer_pool.alloc(MAX_PENDING_REQUEST_BYTES);
         let mut total_read = 0 as usize;
-        let mut is_request_valid = false;
-        let mut has_sent_resp = false;
         loop {
             total_read = total_read
                 + upstream
@@ -119,91 +122,88 @@ impl Server {
                         .context("failed to parse request")
                         .map_err(|_| ProxyError::BadRequest)?;
 
-                    is_request_valid = true;
+                    if let Some(downstream_addr) = downstream_addr {
+                        if let Ok(mut downstream) = TcpStream::connect(downstream_addr).await {
+                            Self::write_to_stream(&mut downstream, &buf[..total_read]).await?;
+                            Self::start_stream_transfer(&mut downstream, &mut upstream)
+                                .await
+                                .ok();
+                        }
+                        return Ok(());
+                    }
 
                     let addrs = lookup_host(&addr)
                         .await
                         .context(format!("failed to resolve DNS for addr: {}", addr))
-                        .map_err(|_| ProxyError::BadGateway)?;
+                        .map_err(|e| ProxyError::BadGateway(e))?;
 
                     for addr in addrs {
                         if let Ok(mut downstream) = TcpStream::connect(addr).await {
-                            upstream
-                                .write(HTTP_RESP_200)
-                                .await
-                                .context(format!(
-                                    "failed to write to upstream, addr: {:?}",
-                                    upstream.local_addr()
-                                ))
-                                .map_err(|e| ProxyError::Disconnected(e))?;
-
-                            has_sent_resp = true;
-
                             let mut remaining_buf_start_index: usize = 0;
                             if http_request.is_connect_request() {
                                 remaining_buf_start_index = http_request.header_len;
+                                Self::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
                             }
+
                             if remaining_buf_start_index < total_read {
-                                downstream
-                                    .write(&buf[remaining_buf_start_index..total_read])
-                                    .await
-                                    .context(format!(
-                                        "failed to write to downstream, addr: {}",
-                                        addr
-                                    ))
-                                    .map_err(|e| ProxyError::Disconnected(e))?;
-                            }
+                                let header =
+                                    str::from_utf8(&buf[remaining_buf_start_index..total_read])
+                                        .context("failed to convert header as UTF-8 string")
+                                        .map_err(|_| ProxyError::BadRequest)?
+                                        .replace("Proxy-Connection", "Connection")
+                                        .replace("proxy-connection", "Connection");
 
-                            loop {
-                                let (down_bytes, up_bytes) =
-                                    tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
-                                        .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
-                                        .await?;
+                                Self::write_to_stream(&mut downstream, header.as_bytes()).await?;
 
-                                if down_bytes == 0 && up_bytes == 0 {
-                                    break;
+                                if http_request.header_len < total_read {
+                                    Self::write_to_stream(
+                                        &mut downstream,
+                                        &buf[http_request.header_len..total_read],
+                                    )
+                                    .await?;
                                 }
                             }
 
-                            break;
+                            Self::start_stream_transfer(&mut downstream, &mut upstream).await?;
                         }
                     }
-                    break;
+
+                    Self::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
+                    return Err(ProxyError::BadGateway(anyhow!(
+                        "cannot connect to {}",
+                        addr
+                    )));
                 }
             }
 
             if total_read >= MAX_PENDING_REQUEST_BYTES {
-                upstream
-                    .write(HTTP_RESP_413)
-                    .await
-                    .context(format!(
-                        "request payload too large, addr: {:?}",
-                        upstream.peer_addr()
-                    ))
-                    .map_err(|_| ProxyError::PayloadTooLarge)?;
-
-                break;
+                Self::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
+                return Err(ProxyError::PayloadTooLarge);
             }
         }
+    }
 
-        if !is_request_valid {
-            error!("invalid request from: {:?}", upstream.local_addr());
-            upstream
-                .write(HTTP_RESP_400)
-                .await
-                .context(format!("invalid request, addr: {:?}", upstream.peer_addr()))
-                .map_err(|_| ProxyError::BadRequest)?;
-        } else if !has_sent_resp {
-            upstream
-                .write(HTTP_RESP_502)
-                .await
-                .context(format!(
-                    "failed to connect to downstream for upstream: {:?}",
-                    upstream.peer_addr()
-                ))
-                .map_err(|_| ProxyError::BadGateway)?;
-        }
-
+    async fn write_to_stream(stream: &mut TcpStream, buf: &[u8]) -> Result<(), ProxyError> {
+        stream
+            .write(buf)
+            .await
+            .context(format!(
+                "failed to write to stream, addr: {:?}",
+                stream.peer_addr()
+            ))
+            .map_err(|e| ProxyError::Disconnected(e))?;
         Ok(())
+    }
+
+    async fn start_stream_transfer(
+        a_stream: &mut TcpStream,
+        b_stream: &mut TcpStream,
+    ) -> Result<(), ProxyError> {
+        loop {
+            // copy data until error
+            tokio::io::copy_bidirectional(a_stream, b_stream)
+                .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
+                .await?;
+        }
     }
 }

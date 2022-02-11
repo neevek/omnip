@@ -39,7 +39,7 @@ fn main() {
 }
 
 async fn run() -> Result<()> {
-    let mut server = Server::new("0.0.0.0:1091".parse().unwrap());
+    let mut server = Server::new("0.0.0.0:1091".parse().unwrap(), "0.0.0.0:9800".parse().ok());
     server.bind().await?;
     server.start().await?;
     Ok(())
