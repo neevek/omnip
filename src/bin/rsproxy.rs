@@ -150,9 +150,9 @@ struct RsproxyArgs {
     proxy_rules_file: String,
 
     /// Threads to run async tasks
-    #[clap(short = 't', long, default_value = "0", display_order = 3)]
+    #[clap(short = 't', long, default_value = "0", display_order = 4)]
     threads: usize,
 
-    #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 4)]
+    #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 5)]
     loglevel: String,
 }
