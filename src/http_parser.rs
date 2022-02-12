@@ -1,3 +1,4 @@
+use crate::NetAddr;
 use log::{debug, error};
 use std::collections::HashMap;
 use url::Url;
@@ -19,47 +20,65 @@ impl HttpRequest {
         self.headers.get("Proxy-Connection")
     }
 
-    pub fn get_request_addr(&self) -> Option<String> {
+    pub fn get_request_addr(&self) -> Option<NetAddr> {
+        //let host;
+        let mut addr = None;
         if self.is_connect_request() {
             // url is the address, host:port is assumed
-            return Some(self.url.clone());
+            addr = Some(self.url.as_str());
+        } else if let Some(host) = self.headers.get("host") {
+            // host is the address, host:port is assumed
+            addr = Some(host);
+        }
+
+        if let Some(addr) = addr {
+            let start_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind("]") {
+                ipv6_end_bracket_pos + 1
+            } else {
+                0
+            };
+
+            let host;
+            let mut port = None;
+            if let Some(pos) = addr[start_pos..].find(":") {
+                host = addr[..pos].to_string();
+                port = addr[(pos + 1)..].parse().ok();
+            } else {
+                host = addr.to_string();
+            }
+
+            if let None = port {
+                port = if self.url.starts_with("https") {
+                    Some(443)
+                } else {
+                    Some(80)
+                }
+            }
+
+            return Some(NetAddr {
+                host,
+                port: port.unwrap(),
+            });
         }
 
         debug!("will parse url first: {}", self.url);
         let url = Url::parse(&self.url);
         if let Some(url) = url.ok() {
             if url.scheme().starts_with("http") {
-                let addr: String;
-                if let Some(port) = url.port() {
-                    addr = format!("{}:{}", url.host_str()?, port).to_string();
-                } else {
-                    addr = format!(
-                        "{}:{}",
-                        url.host_str()?,
-                        if url.scheme().starts_with("https") {
-                            443
-                        } else {
-                            80
-                        }
-                    )
-                    .to_string();
+                let host = url.host_str()?.to_string();
+                let mut port = url.port().unwrap_or(0);
+                if port == 0 {
+                    port = if url.scheme().starts_with("https") {
+                        443
+                    } else {
+                        80
+                    }
                 }
 
-                return Some(addr);
+                return Some(NetAddr { host, port });
             }
         }
 
-        if let Some(host) = self.headers.get("host") {
-            let start_pos = if let Some(ipv6_end_bracket_pos) = host.rfind("]") {
-                ipv6_end_bracket_pos
-            } else {
-                0
-            };
-
-            if host[start_pos..].find(":").is_some() {
-                return Some(host.to_string());
-            }
-        }
         error!("invalid request");
         None
     }

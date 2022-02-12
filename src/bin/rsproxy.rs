@@ -3,7 +3,6 @@ use colored::Colorize;
 use log::info;
 use rsproxy::*;
 use std::io::Write;
-use url::Url;
 
 extern crate colored;
 extern crate pretty_env_logger;

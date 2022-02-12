@@ -132,7 +132,7 @@ impl Server {
                         return Ok(());
                     }
 
-                    let addrs = lookup_host(&addr)
+                    let addrs = lookup_host(addr.as_string())
                         .await
                         .context(format!("failed to resolve DNS for addr: {}", addr))
                         .map_err(|e| ProxyError::BadGateway(e))?;
