@@ -2,10 +2,13 @@ use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 use log::{error, info};
+use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
 use rsproxy::*;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::time::Duration;
 use std::usize;
 use std::{io::Write, sync::RwLock};
 
@@ -69,18 +72,54 @@ async fn run(config: Config) -> Result<()> {
     if !config.proxy_rules_file.is_empty() {
         let mut prm = ProxyRuleManager::new();
         let count = prm.add_rules_by_file(config.proxy_rules_file.as_str());
-        proxy_rule_manager = Some(Arc::new(RwLock::new(prm)));
+        let prm = Arc::new(RwLock::new(prm));
+        proxy_rule_manager = Some(prm.clone());
 
         info!(
             "{} proxy rules added with file: {}",
             count, config.proxy_rules_file
         );
+
+        watch_proxy_rules_file(config.proxy_rules_file.clone(), prm);
     }
 
     let mut server = Server::new(config.addr, config.downstream_addr, proxy_rule_manager);
     server.bind().await?;
     server.start().await?;
     Ok(())
+}
+
+fn watch_proxy_rules_file(proxy_rules_file: String, prm: Arc<RwLock<ProxyRuleManager>>) {
+    std::thread::spawn(move || {
+        let (tx, rx) = channel();
+        let mut watcher = watcher(tx, Duration::from_secs(5))?;
+        watcher.watch(proxy_rules_file.as_str(), RecursiveMode::NonRecursive)?;
+
+        loop {
+            match rx.recv() {
+                Ok(DebouncedEvent::Create(_))
+                | Ok(DebouncedEvent::NoticeWrite(_))
+                | Ok(DebouncedEvent::Write(_)) => {
+                    let mut prm = prm.write().unwrap();
+
+                    prm.clear_all();
+                    let count = prm.add_rules_by_file(proxy_rules_file.as_str());
+
+                    info!(
+                        "updated proxy rules from file: {}, rules updated: {}",
+                        proxy_rules_file, count
+                    );
+                }
+                Err(e) => {
+                    error!("watch error: {:?}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        Result::<()>::Ok(())
+    });
 }
 
 fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
