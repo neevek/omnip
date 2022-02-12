@@ -6,6 +6,7 @@ use rsproxy::*;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::usize;
 use std::{io::Write, sync::RwLock};
 
 extern crate colored;
@@ -46,7 +47,11 @@ fn main() {
     )
     .unwrap();
 
-    let worker_threads = num_cpus::get() + 1;
+    let worker_threads = if args.threads > 0 {
+        args.threads
+    } else {
+        num_cpus::get()
+    };
     info!("will use {} worker threads", worker_threads);
 
     tokio::runtime::Builder::new_multi_thread()
@@ -143,6 +148,10 @@ struct RsproxyArgs {
     /// Path to the proxy rules file
     #[clap(short = 'r', long, default_value = "", display_order = 3)]
     proxy_rules_file: String,
+
+    /// Threads to run async tasks
+    #[clap(short = 't', long, default_value = "0", display_order = 3)]
+    threads: usize,
 
     #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 4)]
     loglevel: String,
