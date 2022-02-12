@@ -1,10 +1,9 @@
 use byte_pool::BytePool;
 use std::fmt::Formatter;
+use std::net::SocketAddr;
 use std::sync::Arc;
 mod server;
 pub use server::Server;
-mod session;
-pub use session::Session;
 pub mod http_parser;
 mod proxy_rule_manager;
 pub use proxy_rule_manager::ProxyRuleManager;
@@ -33,7 +32,9 @@ impl std::fmt::Display for NetAddr {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Config {
-    pub loglevel: String,
+    pub addr: SocketAddr,
+    pub downstream_addr: Option<SocketAddr>,
+    pub proxy_rules_file: String,
 }

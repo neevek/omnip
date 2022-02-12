@@ -6,7 +6,7 @@ use url::Url;
 pub struct HttpRequest {
     method: String,
     url: String,
-    version: String,
+    _version: String,
     headers: HashMap<String, String>,
     pub header_len: usize,
 }
@@ -119,7 +119,7 @@ pub fn parse(buffer: &str) -> Option<HttpRequest> {
     return Some(HttpRequest {
         method: method.to_string(),
         url: url.to_string(),
-        version: version.to_string(),
+        _version: version.to_string(),
         headers,
         header_len: buffer.len(),
     });
