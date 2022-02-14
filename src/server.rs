@@ -103,7 +103,6 @@ impl Server {
 
                 Err(e) => {
                     error!("access server failed, err: {}", e);
-                    break;
                 }
             }
         }
@@ -134,6 +133,8 @@ impl Server {
                         .get_request_addr()
                         .context("failed to parse request")
                         .map_err(|_| ProxyError::BadRequest)?;
+
+                    debug!("received request: {}", addr);
 
                     if let Some(downstream_addr) = downstream_addr {
                         if proxy_rule_manager.is_none()
