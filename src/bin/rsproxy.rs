@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use colored::Colorize;
 use log::{error, info};
 use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
 use rsproxy::*;
@@ -12,7 +11,6 @@ use std::time::Duration;
 use std::usize;
 use std::{io::Write, sync::RwLock};
 
-extern crate colored;
 extern crate pretty_env_logger;
 
 fn main() {
@@ -134,6 +132,21 @@ fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
     Some(addr.parse().ok()?)
 }
 
+macro_rules! colored_log {
+    ($buf:ident, $record:ident, $term_color:literal, $level:literal) => {{
+        let filename = $record.file().unwrap_or("unknown");
+        let filename = &filename[filename.rfind('/').map(|pos| pos + 1).unwrap_or(0)..];
+        writeln!(
+            $buf,
+            concat!($term_color, "{} [{}:{}] [", $level, "] {}\x1B[0m"),
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S.%3f"),
+            filename,
+            $record.line().unwrap_or(0),
+            $record.args()
+        )
+    }};
+}
+
 pub struct LogHelper {}
 impl LogHelper {
     pub fn init_logger(loglevel_filter_str: &str) {
@@ -147,26 +160,12 @@ impl LogHelper {
         }
 
         pretty_env_logger::formatted_timed_builder()
-            .format(|buf, record| {
-                let level = record.level();
-                let level = match level {
-                    log::Level::Trace => "T".white(),
-                    log::Level::Debug => "D".green(),
-                    log::Level::Info => "I".blue(),
-                    log::Level::Warn => "W".yellow(),
-                    log::Level::Error => "E".red(),
-                };
-                let filename = record.file().unwrap_or("unknown");
-                let filename = &filename[filename.rfind('/').map(|pos| pos + 1).unwrap_or(0)..];
-                writeln!(
-                    buf,
-                    "{} [{}:{}] [{}] - {}",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S.%3f"),
-                    filename,
-                    record.line().unwrap_or(0),
-                    level,
-                    record.args()
-                )
+            .format(|buf, record| match record.level() {
+                log::Level::Trace => colored_log!(buf, record, "\x1B[0m", "T"),
+                log::Level::Debug => colored_log!(buf, record, "\x1B[92m", "D"),
+                log::Level::Info => colored_log!(buf, record, "\x1B[34m", "I"),
+                log::Level::Warn => colored_log!(buf, record, "\x1B[93m", "W"),
+                log::Level::Error => colored_log!(buf, record, "\x1B[31m", "E"),
             })
             .filter(Some("rsproxy"), loglevel_filter)
             .init();

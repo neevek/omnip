@@ -16,10 +16,6 @@ impl HttpRequest {
         self.method.starts_with("CONNECT")
     }
 
-    pub fn get_proxy_connection_header(&self) -> Option<&String> {
-        self.headers.get("Proxy-Connection")
-    }
-
     pub fn get_request_addr(&self) -> Option<NetAddr> {
         //let host;
         let mut addr = None;

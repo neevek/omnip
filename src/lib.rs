@@ -1,12 +1,13 @@
+mod http_parser;
+mod proxy_rule_manager;
+mod server;
+
 use byte_pool::BytePool;
+pub use proxy_rule_manager::ProxyRuleManager;
+pub use server::Server;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
 use std::sync::Arc;
-mod server;
-pub use server::Server;
-pub mod http_parser;
-mod proxy_rule_manager;
-pub use proxy_rule_manager::ProxyRuleManager;
 
 type BufferPool = Arc<BytePool<Vec<u8>>>;
 
