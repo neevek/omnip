@@ -76,14 +76,6 @@ pub fn serve(config: Config) {
         info!("using downstream: {}", addr);
     }
 
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::FmtSubscriber::builder()
-            .with_max_level(tracing::Level::TRACE)
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .finish(),
-    )
-    .unwrap();
-
     let worker_threads = if config.threads > 0 {
         config.threads
     } else {

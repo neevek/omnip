@@ -7,14 +7,12 @@ edition = "2021"
 crate-type = ["dylib", "lib"]
 
 [dependencies]
-tracing-subscriber = { version = "0.2.5", default-features = false, features = ["env-filter", "fmt", "ansi", "chrono"]}
 clap = { version = "3.0.7", features = ["derive"] }
 tokio = { version = "1.16", features = ["full"] }
 pretty_env_logger = "0.4.0"
 log = "0.4.14"
 chrono = "0.4.19"
 anyhow = "1.0.44"
-tracing = "0.1.29"
 futures-util = "0.3.17"
 pin-utils = "0.1.0"
 byte-pool = "0.2.3"
