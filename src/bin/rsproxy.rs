@@ -7,7 +7,7 @@ extern crate pretty_env_logger;
 fn main() {
     let args = RsproxyArgs::parse();
 
-    init_logger(&args.loglevel);
+    rs_utilities::LogHelper::init_logger("rsp", &args.loglevel);
 
     let addr = parse_sock_addr(&args.addr);
     if addr.is_none() {

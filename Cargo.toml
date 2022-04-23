@@ -20,11 +20,15 @@ num_cpus = "1.13.1"
 url = "2.2.2"
 regex = "1.5"
 notify = "4.0"
+rs-utilities = "0.1.2"
 
 [target.aarch64-linux-android.dependencies]
 jni = "0.19"
 android_logger = "0.10"
 
+[target.armv7-linux-androideabi.dependencies]
+jni = "0.19"
+android_logger = "0.10"
 
 
 
