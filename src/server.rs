@@ -3,6 +3,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
 use std::borrow::BorrowMut;
+use std::cmp::min;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex, RwLock};
@@ -16,7 +17,7 @@ const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_400: &[u8] = b"HTTP/1.1 300 Bad Request\r\nServer: rsp\r\n\r\n";
-const MAX_PENDING_REQUEST_BYTES: usize = 1024 * 128;
+const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
 
 #[derive(Debug)]
 pub enum ProxyError {
@@ -116,7 +117,7 @@ impl Server {
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     ) -> Result<(), ProxyError> {
-        let mut buf = buffer_pool.alloc(MAX_PENDING_REQUEST_BYTES);
+        let mut buf = buffer_pool.alloc(MAX_CLIENT_HEADER_SIZE);
         let mut total_read = 0 as usize;
         loop {
             let nread = upstream
@@ -127,87 +128,99 @@ impl Server {
 
             total_read += nread;
 
-            if let Ok(s) = str::from_utf8(&buf[..total_read]) {
-                if let Some(http_request) = http_parser::parse(s) {
-                    let addr = http_request
-                        .get_request_addr()
-                        .context("failed to parse request")
-                        .map_err(|_| ProxyError::BadRequest)?;
+            let http_request = http_parser::parse(&buf[..total_read]);
+            if http_request.is_none() {
+                if nread == 0 {
+                    Self::write_to_stream(&mut upstream, HTTP_RESP_400).await?;
+                    error!("failed to read request: total_read:{}", total_read);
+                    return Err(ProxyError::BadRequest);
+                }
 
-                    debug!("received request: {}", addr);
+                if total_read == buf.len() {
+                    Self::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
+                    error!("invalid request, total_read:{}", total_read);
+                    return Err(ProxyError::PayloadTooLarge);
+                }
 
-                    if let Some(downstream_addr) = downstream_addr {
-                        if proxy_rule_manager.is_none()
-                            || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), &addr)
-                        {
-                            debug!(
-                                "will forward payload to specified downstream: {:?}",
-                                downstream_addr
-                            );
-                            if let Ok(mut downstream) = TcpStream::connect(downstream_addr).await {
-                                Self::write_to_stream(&mut downstream, &buf[..total_read]).await?;
-                                Self::start_stream_transfer(&mut downstream, &mut upstream)
-                                    .await
-                                    .ok();
-                            }
-                            return Ok(());
-                        }
+                if buf[..min(16, total_read)]
+                    .iter()
+                    .position(|w| w >= &0x80) // non ASCII bytes are not possible to appear in HTTP header
+                    .is_some()
+                {
+                    error!("invalid request, total_read:{}", total_read);
+                    return Err(ProxyError::BadRequest);
+                }
+
+                // read more
+                continue;
+            }
+
+            let http_request = http_request.unwrap();
+            let addr = http_request
+                .get_request_addr()
+                .context("failed to parse request")
+                .map_err(|_| ProxyError::BadRequest)?;
+
+            if let Some(downstream_addr) = downstream_addr {
+                if proxy_rule_manager.is_none()
+                    || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), &addr)
+                {
+                    debug!(
+                        "forward payload to downstream, {} -> {:?}",
+                        addr, downstream_addr
+                    );
+                    if let Ok(mut downstream) = TcpStream::connect(downstream_addr).await {
+                        Self::write_to_stream(&mut downstream, &buf[..total_read]).await?;
+                        Self::start_stream_transfer(&mut downstream, &mut upstream)
+                            .await
+                            .ok();
                     }
-
-                    let addrs = lookup_host(addr.as_string())
-                        .await
-                        .context(format!("failed to resolve DNS for addr: {}", addr.host))
-                        .map_err(|e| ProxyError::BadGateway(e))?;
-
-                    for addr in addrs {
-                        if let Ok(mut downstream) = TcpStream::connect(addr).await {
-                            let mut remaining_buf_start_index: usize = 0;
-                            if http_request.is_connect_request() {
-                                remaining_buf_start_index = http_request.header_len;
-                                Self::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
-                            }
-
-                            if remaining_buf_start_index < total_read {
-                                let header =
-                                    str::from_utf8(&buf[remaining_buf_start_index..total_read])
-                                        .context("failed to convert header as UTF-8 string")
-                                        .map_err(|_| ProxyError::BadRequest)?
-                                        .replace("Proxy-Connection", "Connection")
-                                        .replace("proxy-connection", "Connection");
-
-                                Self::write_to_stream(&mut downstream, header.as_bytes()).await?;
-
-                                if http_request.header_len < total_read {
-                                    Self::write_to_stream(
-                                        &mut downstream,
-                                        &buf[http_request.header_len..total_read],
-                                    )
-                                    .await?;
-                                }
-                            }
-
-                            return Self::start_stream_transfer(&mut downstream, &mut upstream)
-                                .await;
-                        }
-                    }
-
-                    Self::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
-                    return Err(ProxyError::BadGateway(anyhow!(
-                        "cannot connect to {}",
-                        addr
-                    )));
+                    return Ok(());
                 }
             }
 
-            if nread == 0 {
-                Self::write_to_stream(&mut upstream, HTTP_RESP_400).await?;
-                return Err(ProxyError::BadRequest);
+            debug!("serve request directly: {}", addr);
+
+            let addrs = lookup_host(addr.as_string())
+                .await
+                .context(format!("failed to resolve DNS for addr: {}", addr.host))
+                .map_err(|e| ProxyError::BadGateway(e))?;
+
+            for addr in addrs {
+                if let Ok(mut downstream) = TcpStream::connect(addr).await {
+                    let mut payload_start_index: usize = 0;
+                    if http_request.is_connect_request() {
+                        payload_start_index = http_request.header_len;
+                        Self::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
+                    }
+
+                    if payload_start_index < total_read {
+                        let header = str::from_utf8(&buf[payload_start_index..total_read])
+                            .context("failed to convert header as UTF-8 string")
+                            .map_err(|_| ProxyError::BadRequest)?
+                            .replace("Proxy-Connection", "Connection")
+                            .replace("proxy-connection", "Connection");
+
+                        Self::write_to_stream(&mut downstream, header.as_bytes()).await?;
+
+                        if http_request.header_len < total_read {
+                            Self::write_to_stream(
+                                &mut downstream,
+                                &buf[http_request.header_len..total_read],
+                            )
+                            .await?;
+                        }
+                    }
+
+                    return Self::start_stream_transfer(&mut downstream, &mut upstream).await;
+                }
             }
 
-            if total_read >= MAX_PENDING_REQUEST_BYTES {
-                Self::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
-                return Err(ProxyError::PayloadTooLarge);
-            }
+            Self::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
+            return Err(ProxyError::BadGateway(anyhow!(
+                "cannot connect to {}",
+                addr
+            )));
         }
     }
 
@@ -253,8 +266,11 @@ impl Server {
                 .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
                 .await?;
             debug!(
-                "transfer: {}, {}, {:?} <=> {:?}",
-                a_bytes, b_bytes, a_stream, b_stream
+                "transfer, in:{}, out:{}, {:?} <-> {:?}",
+                a_bytes,
+                b_bytes,
+                a_stream.local_addr(),
+                b_stream.local_addr()
             );
             if a_bytes == 0 && b_bytes == 0 {
                 break;

@@ -80,8 +80,9 @@ impl HttpRequest {
     }
 }
 
-pub fn parse(buffer: &str) -> Option<HttpRequest> {
+pub fn parse(buffer: &[u8]) -> Option<HttpRequest> {
     let request_text = find_http_request_text(buffer)?;
+    let request_text = std::str::from_utf8(&request_text).ok()?;
 
     let parts: Vec<&str> = request_text.split("\r\n").collect();
     if parts.is_empty() {
@@ -117,27 +118,21 @@ pub fn parse(buffer: &str) -> Option<HttpRequest> {
         url: url.to_string(),
         _version: version.to_string(),
         headers,
-        header_len: buffer.len(),
+        header_len: request_text.len(),
     });
 }
 
-fn find_http_request_text(buffer: &str) -> Option<&str> {
+fn find_http_request_text(buffer: &[u8]) -> Option<&[u8]> {
     let len = buffer.len();
-    if len < 4 {
-        return None;
-    }
+    if len > 4 {
+        let start_index = len - 4;
+        if &buffer[start_index..len] == b"\r\n\r\n" {
+            return Some(&buffer[..len]);
+        }
 
-    let mut chars = buffer.chars();
-    if chars.nth(len - 1) == Some('\n')
-        && chars.nth(len - 2) == Some('\r')
-        && chars.nth(len - 3) == Some('\n')
-        && chars.nth(len - 4) == Some('\r')
-    {
-        return Some(&buffer[..len]);
-    }
-
-    if let Some(len) = buffer.find("\r\n\r\n") {
-        return Some(&buffer[..len]);
+        if let Some(start_index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            return Some(&buffer[..(start_index + 4)]);
+        }
     }
 
     None
