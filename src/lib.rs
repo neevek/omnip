@@ -29,12 +29,6 @@ pub struct NetAddr {
     pub port: u16,
 }
 
-impl NetAddr {
-    fn as_string(&self) -> String {
-        format!("{}:{}", self.host, self.port)
-    }
-}
-
 impl std::fmt::Display for NetAddr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         formatter.write_fmt(format_args!("{}:{}", self.host, self.port))

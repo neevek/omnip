@@ -46,8 +46,8 @@ struct RsproxyArgs {
     #[clap(short = 't', long, default_value = "0", display_order = 4)]
     threads: usize,
 
-    /// DoT (DNS-over-TLS) server
-    #[clap(long, possible_values = &["alidns", "dnspod", "google", "none"], default_value = "none", display_order = 5)]
+    /// DoT (DNS-over-TLS) server, e.g. dns.google
+    #[clap(long, default_value = "", display_order = 5)]
     dot_server: String,
 
     /// comma saprated domain servers (E.g. 1.1.1.1,8.8.8.8), will be used if no dot_server is specified, or system default if empty

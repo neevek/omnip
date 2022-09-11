@@ -2,7 +2,7 @@ use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
-use rs_utilities::dns::TokioDNSResolver;
+use rs_utilities::dns::DynDNSResolver;
 use std::borrow::BorrowMut;
 use std::cmp::min;
 use std::net::SocketAddr;
@@ -10,7 +10,6 @@ use std::str;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::lookup_host,
     net::{TcpListener, TcpStream},
 };
 
@@ -34,7 +33,7 @@ pub struct Server {
     buffer_pool: BufferPool,
     is_running: Mutex<bool>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-    resolver: Arc<Option<TokioDNSResolver>>,
+    resolver: Option<Arc<DynDNSResolver>>,
 }
 
 impl Server {
@@ -45,7 +44,7 @@ impl Server {
             buffer_pool: crate::new_buffer_pool(),
             is_running: Mutex::new(false),
             proxy_rule_manager,
-            resolver: Arc::new(None),
+            resolver: None,
         }
     }
 
@@ -68,9 +67,9 @@ impl Server {
 
         *self.is_running.lock().unwrap() = true;
 
-        self.resolver = Arc::new(
-            rs_utilities::dns::tokio_resolver(
-                self.config.dot_server.as_str().into(),
+        self.resolver = Some(Arc::new(
+            rs_utilities::dns::resolver(
+                self.config.dot_server.as_str(),
                 self.config
                     .name_servers
                     .split(",")
@@ -79,7 +78,7 @@ impl Server {
                     .collect(),
             )
             .await,
-        );
+        ));
 
         info!("started listening, addr: {}", self.config.addr);
 
@@ -92,7 +91,7 @@ impl Server {
                         break;
                     }
 
-                    let resolver = self.resolver.clone();
+                    let resolver = self.resolver.as_ref().unwrap().clone();
                     let buffer_pool = self.buffer_pool.clone();
                     let downstream_addr = self.config.downstream_addr.clone();
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
@@ -125,7 +124,7 @@ impl Server {
     }
 
     pub async fn process_stream(
-        resolver: Arc<Option<TokioDNSResolver>>,
+        resolver: Arc<DynDNSResolver>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
         downstream_addr: Option<SocketAddr>,
@@ -193,23 +192,14 @@ impl Server {
                 }
             }
 
-            let addrs: Vec<SocketAddr>;
-            if let Some(resolver) = resolver.as_ref() {
-                addrs = resolver
-                    .lookup(&addr.host)
-                    .await
-                    .context(format!("failed to resolve DNS for addr: {}", addr.host))
-                    .unwrap()
-                    .iter()
-                    .map(|&e| SocketAddr::new(e, addr.port))
-                    .collect();
-            } else {
-                addrs = lookup_host(addr.as_string())
-                    .await
-                    .context(format!("failed to resolve DNS for addr: {}", addr.host))
-                    .unwrap()
-                    .collect();
-            }
+            let addrs: Vec<SocketAddr> = resolver
+                .lookup(&addr.host)
+                .await
+                .context(format!("failed to resolve DNS for addr: {}", addr.host))
+                .unwrap()
+                .iter()
+                .map(|&e| SocketAddr::new(e, addr.port))
+                .collect();
 
             debug!("serve request directly: {}", addr);
 
