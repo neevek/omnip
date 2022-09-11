@@ -211,6 +211,8 @@ pub mod android {
         jaddr: JString,
         jdownstream: JString,
         jproxyRulesFile: JString,
+        jdotServer: JString,
+        jnameServers: JString,
         jthreads: jint,
     ) -> jboolean {
         if jaddr.is_null() {
@@ -234,12 +236,24 @@ pub mod android {
         } else {
             String::from("")
         };
+        let dotServer = if !jdotServer.is_null() {
+            env.get_string(jdotServer).unwrap().into()
+        } else {
+            String::from("")
+        };
+        let nameServers = if !jnameServers.is_null() {
+            env.get_string(jnameServers).unwrap().into()
+        } else {
+            String::from("")
+        };
 
         let config = Config {
             addr: addr.unwrap(),
             downstream_addr: parse_sock_addr(downstream.as_str()),
             proxy_rules_file,
             threads: jthreads as usize,
+            dot_server: dotServer,
+            name_servers: nameServers,
         };
 
         thread::spawn(|| serve(config));
