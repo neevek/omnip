@@ -47,6 +47,8 @@ pub struct Config {
     pub downstream_addr: Option<SocketAddr>,
     pub proxy_rules_file: String,
     pub threads: usize,
+    pub dot_server: String,
+    pub name_servers: String,
 }
 
 pub fn serve(config: Config) {
@@ -124,7 +126,7 @@ async fn run(config: Config) -> Result<()> {
         watch_proxy_rules_file(config.proxy_rules_file.clone(), prm);
     }
 
-    let mut server = Server::new(config.addr, config.downstream_addr, proxy_rule_manager);
+    let mut server = Server::new(config, proxy_rule_manager);
     server.bind().await?;
     server.start().await?;
     Ok(())

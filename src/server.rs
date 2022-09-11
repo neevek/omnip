@@ -1,7 +1,8 @@
-use crate::{http_parser, BufferPool, NetAddr, ProxyRuleManager};
+use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
+use rs_utilities::dns::TokioDNSResolver;
 use std::borrow::BorrowMut;
 use std::cmp::min;
 use std::net::SocketAddr;
@@ -28,36 +29,33 @@ pub enum ProxyError {
 }
 
 pub struct Server {
-    addr: SocketAddr,
+    config: Config,
     tcp_listener: Option<TcpListener>,
     buffer_pool: BufferPool,
     is_running: Mutex<bool>,
-    downstream_addr: Option<SocketAddr>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
+    resolver: Arc<Option<TokioDNSResolver>>,
 }
 
 impl Server {
-    pub fn new(
-        addr: SocketAddr,
-        downstream_addr: Option<SocketAddr>,
-        proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-    ) -> Self {
+    pub fn new(config: Config, proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>) -> Self {
         Server {
-            addr,
+            config,
             tcp_listener: None,
             buffer_pool: crate::new_buffer_pool(),
             is_running: Mutex::new(false),
-            downstream_addr,
             proxy_rule_manager,
+            resolver: Arc::new(None),
         }
     }
 
     pub async fn bind(&mut self) -> Result<()> {
-        let tcp_listener = TcpListener::bind(self.addr)
-            .await
-            .context(format!("failed to bind server on address: {}", self.addr))?;
+        let tcp_listener = TcpListener::bind(self.config.addr).await.context(format!(
+            "failed to bind server on address: {}",
+            self.config.addr
+        ))?;
 
-        info!("server bound to {}", self.addr);
+        info!("server bound to {}", self.config.addr);
         self.tcp_listener = Some(tcp_listener);
 
         Ok(())
@@ -70,7 +68,20 @@ impl Server {
 
         *self.is_running.lock().unwrap() = true;
 
-        info!("started listening, addr: {}", self.addr);
+        self.resolver = Arc::new(
+            rs_utilities::dns::tokio_resolver(
+                self.config.dot_server.as_str().into(),
+                self.config
+                    .name_servers
+                    .split(",")
+                    .skip_while(|&x| x.is_empty())
+                    .map(|e| e.trim().to_string())
+                    .collect(),
+            )
+            .await,
+        );
+
+        info!("started listening, addr: {}", self.config.addr);
 
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
@@ -81,11 +92,13 @@ impl Server {
                         break;
                     }
 
+                    let resolver = self.resolver.clone();
                     let buffer_pool = self.buffer_pool.clone();
-                    let downstream_addr = self.downstream_addr.clone();
+                    let downstream_addr = self.config.downstream_addr.clone();
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
                     tokio::spawn(async move {
                         Self::process_stream(
+                            resolver,
                             buffer_pool,
                             upstream,
                             downstream_addr,
@@ -112,6 +125,7 @@ impl Server {
     }
 
     pub async fn process_stream(
+        resolver: Arc<Option<TokioDNSResolver>>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
         downstream_addr: Option<SocketAddr>,
@@ -179,12 +193,25 @@ impl Server {
                 }
             }
 
-            debug!("serve request directly: {}", addr);
+            let addrs: Vec<SocketAddr>;
+            if let Some(resolver) = resolver.as_ref() {
+                addrs = resolver
+                    .lookup(&addr.host)
+                    .await
+                    .context(format!("failed to resolve DNS for addr: {}", addr.host))
+                    .unwrap()
+                    .iter()
+                    .map(|&e| SocketAddr::new(e, addr.port))
+                    .collect();
+            } else {
+                addrs = lookup_host(addr.as_string())
+                    .await
+                    .context(format!("failed to resolve DNS for addr: {}", addr.host))
+                    .unwrap()
+                    .collect();
+            }
 
-            let addrs = lookup_host(addr.as_string())
-                .await
-                .context(format!("failed to resolve DNS for addr: {}", addr.host))
-                .map_err(|e| ProxyError::BadGateway(e))?;
+            debug!("serve request directly: {}", addr);
 
             for addr in addrs {
                 if let Ok(mut downstream) = TcpStream::connect(addr).await {

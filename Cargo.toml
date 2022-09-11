@@ -20,7 +20,8 @@ num_cpus = "1.13.1"
 url = "2.2.2"
 regex = "1.5"
 notify = "4.0"
-rs-utilities = "0.1.2"
+#rs-utilities = "0.1.2"
+rs-utilities = { path = "../rs-utilities" }
 
 [target.aarch64-linux-android.dependencies]
 jni = "0.19"
