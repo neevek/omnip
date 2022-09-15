@@ -195,8 +195,13 @@ impl Server {
             let addrs: Vec<SocketAddr> = resolver
                 .lookup(&addr.host)
                 .await
-                .context(format!("failed to resolve DNS for addr: {}", addr.host))
-                .unwrap()
+                .map_err(|e| {
+                    ProxyError::BadGateway(anyhow!(
+                        "failed to resolve: {}, error: {}",
+                        addr.host,
+                        e
+                    ))
+                })?
                 .iter()
                 .map(|&e| SocketAddr::new(e, addr.port))
                 .collect();
