@@ -59,13 +59,13 @@ impl ProxyRuleManager {
     pub fn add_rules_by_file(&mut self, file_path: &str) -> usize {
         let mut count = 0;
         if let Ok(file) = File::open(file_path) {
-            for line in BufReader::new(file).lines() {
+            BufReader::new(file).lines().for_each(|line| {
                 if let Ok(line) = line {
                     if self.add_rule(line.as_str()) {
                         count += 1;
                     }
                 }
-            }
+            });
         }
 
         info!("added {} rules", count);
@@ -131,13 +131,13 @@ impl ProxyRuleManager {
         let rule_len = rule.len();
         let bytes = rule.as_bytes();
 
-        if rule_len > 2 && bytes[0] == '/' as u8 && bytes[rule.len() - 1] == '/' as u8 {
+        if rule_len > 2 && bytes[0] == b'/' && bytes[rule.len() - 1] == b'/' {
             let re = Regex::new(&rule[1..rule_len - 1]).ok()?;
             return Some(Box::new(move |host, _port| re.is_match(host)));
         }
 
         let ch = bytes[0].to_ascii_lowercase() as char;
-        if ch != '|' && ch != '.' && (ch < '0' || ch > '9') && (ch < 'a' || ch > 'z') {
+        if ch != '|' && ch != '.' && !('0'..='9').contains(&ch) && !('a'..='z').contains(&ch) {
             return None;
         }
 
@@ -149,7 +149,7 @@ impl ProxyRuleManager {
         if rule.starts_with("||") {
             rule = &rule[2..];
             fuzzy_match = true;
-        } else if rule.starts_with(".") {
+        } else if rule.starts_with('.') {
             rule = &rule[1..];
             fuzzy_match = true;
         } else if rule.starts_with("|https://") {
@@ -163,7 +163,7 @@ impl ProxyRuleManager {
     }
 
     pub fn parse_exception_rule(rule: &str) -> Option<FnMatch> {
-        if rule.is_empty() || rule.as_bytes()[0] != '@' as u8 {
+        if rule.is_empty() || rule.as_bytes()[0] != b'@' {
             return None;
         }
 
@@ -192,7 +192,7 @@ impl ProxyRuleManager {
                 return false;
             }
             if let Some(pos) = host.find(rule_copy.as_str()) {
-                return pos == 0 || (fuzzy_match && host.as_bytes()[pos - 1] == '.' as u8);
+                return pos == 0 || (fuzzy_match && host.as_bytes()[pos - 1] == b'.');
             }
             false
         })
@@ -207,10 +207,10 @@ impl ProxyRuleManager {
         false
     }
 
-    fn do_match(rules: &Vec<ProxyRule>, host: &str, port: u16) -> MatchResult {
+    fn do_match(rules: &[ProxyRule], host: &str, port: u16) -> MatchResult {
         let mut needs_sort_rules = false;
         let mut matched = false;
-        for (index, rule) in rules.into_iter().enumerate() {
+        for (index, rule) in rules.iter().enumerate() {
             if rule.matches(host, port) {
                 matched = true;
                 if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
@@ -227,5 +227,11 @@ impl ProxyRuleManager {
             matched,
             needs_sort_rules,
         }
+    }
+}
+
+impl Default for ProxyRuleManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

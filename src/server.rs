@@ -72,7 +72,7 @@ impl Server {
                 self.config.dot_server.as_str(),
                 self.config
                     .name_servers
-                    .split(",")
+                    .split(',')
                     .skip_while(|&x| x.is_empty())
                     .map(|e| e.trim().to_string())
                     .collect(),
@@ -93,7 +93,7 @@ impl Server {
 
                     let resolver = self.resolver.as_ref().unwrap().clone();
                     let buffer_pool = self.buffer_pool.clone();
-                    let downstream_addr = self.config.downstream_addr.clone();
+                    let downstream_addr = self.config.downstream_addr;
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
                     tokio::spawn(async move {
                         Self::process_stream(
@@ -131,7 +131,7 @@ impl Server {
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     ) -> Result<(), ProxyError> {
         let mut buf = buffer_pool.alloc(MAX_CLIENT_HEADER_SIZE);
-        let mut total_read = 0 as usize;
+        let mut total_read = 0;
         loop {
             let nread = upstream
                 .read(&mut buf[total_read..])
@@ -155,11 +155,7 @@ impl Server {
                     return Err(ProxyError::PayloadTooLarge);
                 }
 
-                if buf[..min(16, total_read)]
-                    .iter()
-                    .position(|w| w >= &0x80) // non ASCII bytes are not possible to appear in HTTP header
-                    .is_some()
-                {
+                if buf[..min(16, total_read)].iter().any(|w| w >= &0x80) {
                     error!("invalid request, total_read:{}", total_read);
                     return Err(ProxyError::BadRequest);
                 }
@@ -263,7 +259,7 @@ impl Server {
                 .sort_rules();
         }
 
-        return result.matched;
+        result.matched
     }
 
     async fn write_to_stream(stream: &mut TcpStream, buf: &[u8]) -> Result<(), ProxyError> {
@@ -274,7 +270,7 @@ impl Server {
                 "failed to write to stream, addr: {:?}",
                 stream.peer_addr()
             ))
-            .map_err(|e| ProxyError::Disconnected(e))?;
+            .map_err(ProxyError::Disconnected)?;
         Ok(())
     }
 

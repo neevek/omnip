@@ -28,7 +28,7 @@ impl HttpRequest {
         }
 
         if let Some(addr) = addr {
-            let start_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind("]") {
+            let start_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind(']') {
                 ipv6_end_bracket_pos + 1
             } else {
                 0
@@ -36,14 +36,14 @@ impl HttpRequest {
 
             let host;
             let mut port = None;
-            if let Some(pos) = addr[start_pos..].find(":") {
+            if let Some(pos) = addr[start_pos..].find(':') {
                 host = addr[..pos].to_string();
                 port = addr[(pos + 1)..].parse().ok();
             } else {
                 host = addr.to_string();
             }
 
-            if let None = port {
+            if port.is_none() {
                 port = if self.url.starts_with("https") {
                     Some(443)
                 } else {
@@ -59,7 +59,7 @@ impl HttpRequest {
 
         debug!("will parse url first: {}", self.url);
         let url = Url::parse(&self.url);
-        if let Some(url) = url.ok() {
+        if let Ok(url) = url {
             if url.scheme().starts_with("http") {
                 let host = url.host_str()?.to_string();
                 let mut port = url.port().unwrap_or(0);
@@ -82,7 +82,7 @@ impl HttpRequest {
 
 pub fn parse(buffer: &[u8]) -> Option<HttpRequest> {
     let request_text = find_http_request_text(buffer)?;
-    let request_text = std::str::from_utf8(&request_text).ok()?;
+    let request_text = std::str::from_utf8(request_text).ok()?;
 
     let parts: Vec<&str> = request_text.split("\r\n").collect();
     if parts.is_empty() {
@@ -95,7 +95,7 @@ pub fn parse(buffer: &[u8]) -> Option<HttpRequest> {
     let mut headers = HashMap::<String, String>::new();
     for (index, part) in parts.iter().enumerate() {
         if index == 0 {
-            let parts: Vec<&str> = part.split(" ").collect();
+            let parts: Vec<&str> = part.split(' ').collect();
             if parts.len() != 3 {
                 error!("invalid http request");
                 return None;
@@ -104,22 +104,20 @@ pub fn parse(buffer: &[u8]) -> Option<HttpRequest> {
             method = parts[0];
             url = parts[1];
             version = parts[2];
-        } else {
-            if let Some(colon_pos) = part.find(":") {
-                let k = part[0..colon_pos].trim().to_lowercase();
-                let v = part[(colon_pos + 1)..].trim().to_string();
-                headers.insert(k, v);
-            }
+        } else if let Some(colon_pos) = part.find(':') {
+            let k = part[0..colon_pos].trim().to_lowercase();
+            let v = part[(colon_pos + 1)..].trim().to_string();
+            headers.insert(k, v);
         }
     }
 
-    return Some(HttpRequest {
+    Some(HttpRequest {
         method: method.to_string(),
         url: url.to_string(),
         _version: version.to_string(),
         headers,
         header_len: request_text.len(),
-    });
+    })
 }
 
 fn find_http_request_text(buffer: &[u8]) -> Option<&[u8]> {

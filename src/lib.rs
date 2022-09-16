@@ -53,14 +53,12 @@ pub fn serve(config: Config) {
         }
     }
 
-    if !config.proxy_rules_file.is_empty() {
-        if !Path::new(&config.proxy_rules_file).is_file() {
-            error!(
-                "proxy rules file does not exist: {}",
-                config.proxy_rules_file
-            );
-            return;
-        }
+    if !config.proxy_rules_file.is_empty() && !Path::new(&config.proxy_rules_file).is_file() {
+        error!(
+            "proxy rules file does not exist: {}",
+            config.proxy_rules_file
+        );
+        return;
     }
 
     if let Some(addr) = config.downstream_addr {
@@ -95,19 +93,19 @@ pub fn is_running() -> bool {
 pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
     let mut addr = addr.to_string();
     let mut start_pos = 0;
-    if let Some(ipv6_end_bracket_pos) = addr.find("]") {
+    if let Some(ipv6_end_bracket_pos) = addr.find(']') {
         start_pos = ipv6_end_bracket_pos + 1;
     }
-    if addr[start_pos..].find(":").is_none() {
+    if addr[start_pos..].find(':').is_none() {
         addr = format!("127.0.0.1:{}", addr);
     }
-    Some(addr.parse().ok()?)
+    addr.parse().ok()
 }
 
 async fn run(config: Config) -> Result<()> {
     let mut proxy_rule_manager = None;
     if !config.proxy_rules_file.is_empty() {
-        let mut prm = ProxyRuleManager::new();
+        let mut prm = ProxyRuleManager::default();
         let count = prm.add_rules_by_file(config.proxy_rules_file.as_str());
         let prm = Arc::new(RwLock::new(prm));
         proxy_rule_manager = Some(prm.clone());
