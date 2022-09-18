@@ -74,7 +74,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_initLogger(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeInitLogger(
         env: JNIEnv,
         _: JClass,
         jlogLevel: JString,
@@ -87,7 +87,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_create(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeCreate(
         env: JNIEnv,
         _: JClass,
         jaddr: JString,
@@ -142,7 +142,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_start(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStart(
         _env: JNIEnv,
         _: JObject,
         server_ptr: jlong,
@@ -160,7 +160,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_isRunning(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeIsRunning(
         _env: JNIEnv,
         _: JObject,
         server_ptr: jlong,
@@ -170,7 +170,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_stop(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStop(
         _env: JNIEnv,
         _: JObject,
         server_ptr: jlong,
@@ -179,7 +179,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_set_enable_stat(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetEnableStat(
         env: JNIEnv,
         jobj: JObject,
         server_ptr: jlong,
