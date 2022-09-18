@@ -1,21 +1,15 @@
 mod http_parser;
 mod proxy_rule_manager;
 mod server;
+mod stat;
 
 use anyhow::Result;
 use byte_pool::BytePool;
-use log::{error, info, warn};
-use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use server::Server;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-
-static mut IS_RUNNING: bool = false;
+use std::sync::Arc;
 
 type BufferPool = Arc<BytePool<Vec<u8>>>;
 
@@ -45,51 +39,6 @@ pub struct Config {
     pub name_servers: String,
 }
 
-pub fn serve(config: Config) {
-    unsafe {
-        if IS_RUNNING {
-            warn!("rsproxy is alreay running");
-            return;
-        }
-    }
-
-    if !config.proxy_rules_file.is_empty() && !Path::new(&config.proxy_rules_file).is_file() {
-        error!(
-            "proxy rules file does not exist: {}",
-            config.proxy_rules_file
-        );
-        return;
-    }
-
-    if let Some(addr) = config.downstream_addr {
-        info!("using downstream: {}", addr);
-    }
-
-    let worker_threads = if config.threads > 0 {
-        config.threads
-    } else {
-        num_cpus::get()
-    };
-    info!("will use {} worker threads", worker_threads);
-
-    unsafe { IS_RUNNING = true }
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(worker_threads)
-        .build()
-        .unwrap()
-        .block_on(async {
-            run(config).await.unwrap();
-        });
-
-    unsafe { IS_RUNNING = false }
-}
-
-pub fn is_running() -> bool {
-    unsafe { IS_RUNNING }
-}
-
 pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
     let mut addr = addr.to_string();
     let mut start_pos = 0;
@@ -102,72 +51,21 @@ pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
     addr.parse().ok()
 }
 
-async fn run(config: Config) -> Result<()> {
-    let mut proxy_rule_manager = None;
-    if !config.proxy_rules_file.is_empty() {
-        let mut prm = ProxyRuleManager::default();
-        let count = prm.add_rules_by_file(config.proxy_rules_file.as_str());
-        let prm = Arc::new(RwLock::new(prm));
-        proxy_rule_manager = Some(prm.clone());
-
-        info!(
-            "{} proxy rules added with file: {}",
-            count, config.proxy_rules_file
-        );
-
-        watch_proxy_rules_file(config.proxy_rules_file.clone(), prm);
-    }
-
-    let mut server = Server::new(config, proxy_rule_manager);
-    server.bind().await?;
-    server.start().await?;
-    Ok(())
-}
-
-fn watch_proxy_rules_file(proxy_rules_file: String, prm: Arc<RwLock<ProxyRuleManager>>) {
-    std::thread::spawn(move || {
-        let (tx, rx) = channel();
-        let mut watcher = watcher(tx, Duration::from_secs(5))?;
-        watcher.watch(proxy_rules_file.as_str(), RecursiveMode::NonRecursive)?;
-
-        loop {
-            match rx.recv() {
-                Ok(DebouncedEvent::Create(_))
-                | Ok(DebouncedEvent::NoticeWrite(_))
-                | Ok(DebouncedEvent::Write(_)) => {
-                    let mut prm = prm.write().unwrap();
-
-                    prm.clear_all();
-                    let count = prm.add_rules_by_file(proxy_rules_file.as_str());
-
-                    info!(
-                        "updated proxy rules from file: {}, rules updated: {}",
-                        proxy_rules_file, count
-                    );
-                }
-                Err(e) => {
-                    error!("watch error: {:?}", e);
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        Result::<()>::Ok(())
-    });
-}
-
 #[cfg(target_os = "android")]
 #[allow(non_snake_case)]
 pub mod android {
     extern crate jni;
 
+    use jni::objects::JObject;
+    use jni::sys::jlong;
+
     use self::jni::objects::{JClass, JString};
     use self::jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6};
     use self::jni::{JNIEnv, JavaVM};
     use super::*;
+    use log::error;
     use std::os::raw::c_void;
-    use std::thread::{self, sleep};
+    use std::thread;
 
     #[no_mangle]
     pub extern "system" fn JNI_OnLoad(vm: JavaVM, _: *mut c_void) -> jint {
@@ -189,15 +87,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_isRunning(
-        _env: JNIEnv,
-        _: JClass,
-    ) -> jboolean {
-        return if is_running() { JNI_TRUE } else { JNI_FALSE };
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_start(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_create(
         env: JNIEnv,
         _: JClass,
         jaddr: JString,
@@ -206,16 +96,16 @@ pub mod android {
         jdotServer: JString,
         jnameServers: JString,
         jthreads: jint,
-    ) -> jboolean {
+    ) -> jlong {
         if jaddr.is_null() {
-            return JNI_FALSE;
+            return 0;
         }
 
         let str_addr: String = env.get_string(jaddr).unwrap().into();
         let addr = parse_sock_addr(&str_addr);
         if addr.is_none() {
             error!("invalid address: {}", &str_addr);
-            return JNI_FALSE;
+            return 0;
         }
 
         let downstream = if !jdownstream.is_null() {
@@ -248,11 +138,72 @@ pub mod android {
             name_servers: nameServers,
         };
 
-        thread::spawn(|| serve(config));
+        Box::into_raw(Box::new(Server::new(config))) as jlong
+    }
 
-        // wait for a moment for the server to start
-        sleep(std::time::Duration::from_millis(500));
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_start(
+        _env: JNIEnv,
+        _: JObject,
+        server_ptr: jlong,
+    ) {
+        let server = &mut *(server_ptr as *mut Server);
+        if server.has_scheduled_start() {
+            return;
+        }
 
-        return if IS_RUNNING { JNI_TRUE } else { JNI_FALSE };
+        server.set_scheduled_start();
+        thread::spawn(move || {
+            let server = &mut *(server_ptr as *mut Server);
+            server.start_and_block().ok();
+        });
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_isRunning(
+        _env: JNIEnv,
+        _: JObject,
+        server_ptr: jlong,
+    ) -> jboolean {
+        let server = &mut *(server_ptr as *mut Server);
+        server.is_running() as jboolean
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_stop(
+        _env: JNIEnv,
+        _: JObject,
+        server_ptr: jlong,
+    ) {
+        let _boxed_server = Box::from_raw(server_ptr as *mut Server);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_set_enable_stat(
+        env: JNIEnv,
+        jobj: JObject,
+        server_ptr: jlong,
+        enable: jboolean,
+    ) {
+        let server = &mut *(server_ptr as *mut Server);
+        if !server.has_stat_callback() {
+            let jvm = env.get_java_vm().unwrap();
+            let jobj_global_ref = env.new_global_ref(jobj).unwrap();
+            server.set_stat_callback(move |data: &str| {
+                let env = jvm.attach_current_thread().unwrap();
+                if let Ok(s) = env.new_string(data) {
+                    env.call_method(
+                        &jobj_global_ref,
+                        "onStat",
+                        "(Ljava/lang/String;)V",
+                        &[s.into()],
+                    )
+                    .unwrap();
+                }
+            });
+            server.set_enable_stat(true);
+        }
+
+        server.set_enable_stat(enable != 0);
     }
 }

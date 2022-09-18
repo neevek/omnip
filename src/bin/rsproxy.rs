@@ -1,5 +1,5 @@
 use clap::Parser;
-use log::error;
+use log::{error, info};
 use rsproxy::*;
 
 extern crate pretty_env_logger;
@@ -24,7 +24,12 @@ fn main() {
         name_servers: args.name_servers,
     };
 
-    serve(config);
+    let mut server = Server::new(config);
+    server.set_enable_stat(true);
+    server.set_stat_callback(|data: &str| {
+        info!("Server Stat: {}", data);
+    });
+    server.start_and_block().ok();
 }
 
 #[derive(Parser, Debug)]

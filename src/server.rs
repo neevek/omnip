@@ -1,12 +1,19 @@
+use crate::stat::{Stat, StatBridge, StatType};
 use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
-use rs_utilities::dns::DynDNSResolver;
+use notify::event::ModifyKind;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use rs_utilities::dns::DNSResolver;
+use rs_utilities::log_and_bail;
+use serde::Serialize;
 use std::borrow::BorrowMut;
 use std::cmp::min;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::str;
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -31,21 +38,64 @@ pub struct Server {
     config: Config,
     tcp_listener: Option<TcpListener>,
     buffer_pool: BufferPool,
-    is_running: Mutex<bool>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-    resolver: Option<Arc<DynDNSResolver>>,
+    resolver: Option<Arc<DNSResolver>>,
+    watcher: Option<Box<dyn Watcher>>,
+    scheduled_start: bool,
+    is_running: Mutex<bool>,
+    stat_bridge: StatBridge,
+    stat_enabled: bool,
 }
 
 impl Server {
-    pub fn new(config: Config, proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>) -> Self {
+    pub fn new(config: Config) -> Self {
         Server {
             config,
             tcp_listener: None,
             buffer_pool: crate::new_buffer_pool(),
-            is_running: Mutex::new(false),
-            proxy_rule_manager,
+            proxy_rule_manager: None,
             resolver: None,
+            watcher: None,
+            scheduled_start: false,
+            is_running: Mutex::new(false),
+            stat_bridge: StatBridge::new(),
+            stat_enabled: false,
         }
+    }
+
+    pub fn set_scheduled_start(&mut self) {
+        self.scheduled_start = true;
+    }
+
+    pub fn start_and_block(&mut self) -> Result<()> {
+        self.setup_proxy_rules_manager()?;
+
+        if let Some(addr) = self.config.downstream_addr {
+            info!("using downstream: {}", addr);
+        }
+
+        let worker_threads = if self.config.threads > 0 {
+            self.config.threads
+        } else {
+            num_cpus::get()
+        };
+        info!("will use {} worker threads", worker_threads);
+
+        *self.is_running.lock().unwrap() = true;
+
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(worker_threads)
+            .build()
+            .unwrap()
+            .block_on(async {
+                self.bind().await.ok();
+                self.serve().await.ok();
+            });
+
+        *self.is_running.lock().unwrap() = false;
+
+        Ok(())
     }
 
     pub async fn bind(&mut self) -> Result<()> {
@@ -60,14 +110,14 @@ impl Server {
         Ok(())
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn serve(&mut self) -> Result<()> {
         if self.tcp_listener.is_none() {
-            bail!("bind the server first");
+            log_and_bail!("bind the server first");
         }
 
-        *self.is_running.lock().unwrap() = true;
+        self.post_stat(Stat::new(StatType::ServerState, Box::new("Resoving DNS")));
 
-        self.resolver = Some(Arc::new(
+        let resolver = Arc::new(
             rs_utilities::dns::resolver(
                 self.config.dot_server.as_str(),
                 self.config
@@ -78,9 +128,18 @@ impl Server {
                     .collect(),
             )
             .await,
+        );
+
+        self.post_stat(Stat::new(
+            StatType::DNSResolverType,
+            Box::new(resolver.resolver_type().to_string()),
         ));
 
+        self.resolver = Some(resolver);
+
         info!("started listening, addr: {}", self.config.addr);
+
+        self.post_stat(Stat::new(StatType::ServerState, Box::new("Running")));
 
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
@@ -123,8 +182,16 @@ impl Server {
         Ok(())
     }
 
+    pub fn has_scheduled_start(&self) -> bool {
+        self.scheduled_start
+    }
+
+    pub fn is_running(&self) -> bool {
+        *self.is_running.lock().unwrap()
+    }
+
     pub async fn process_stream(
-        resolver: Arc<DynDNSResolver>,
+        resolver: Arc<DNSResolver>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
         downstream_addr: Option<SocketAddr>,
@@ -295,5 +362,97 @@ impl Server {
             }
         }
         Ok(())
+    }
+
+    fn setup_proxy_rules_manager(&mut self) -> Result<()> {
+        let proxy_rules_file = &self.config.proxy_rules_file;
+        if !proxy_rules_file.is_empty() && !Path::new(proxy_rules_file).is_file() {
+            log_and_bail!("proxy rules file does not exist: {}", proxy_rules_file);
+        }
+
+        if !proxy_rules_file.is_empty() {
+            let mut prm = ProxyRuleManager::default();
+            let count = prm.add_rules_by_file(proxy_rules_file);
+
+            info!(
+                "{} proxy rules added with file: {}",
+                count, proxy_rules_file
+            );
+
+            self.proxy_rule_manager = Some(Arc::new(RwLock::new(prm)));
+            self.watch_proxy_rules_file(proxy_rules_file.to_string())
+                .ok();
+        }
+
+        Ok(())
+    }
+
+    fn watch_proxy_rules_file(&mut self, proxy_rules_file: String) -> Result<()> {
+        let (tx, rx) = channel();
+        let mut watcher = RecommendedWatcher::new(
+            move |res| {
+                tx.send(res).ok();
+            },
+            notify::Config::default(),
+        )?;
+
+        watcher.watch(
+            Path::new(proxy_rules_file.as_str()),
+            RecursiveMode::NonRecursive,
+        )?;
+
+        self.watcher = Some(Box::new(watcher));
+
+        let prm = self.proxy_rule_manager.clone().unwrap();
+        std::thread::spawn(move || {
+            loop {
+                match rx.recv() {
+                    Ok(Ok(Event {
+                        kind: EventKind::Modify(ModifyKind::Data(_)),
+                        ..
+                    })) => {
+                        // TODO schedule timer task to refresh the rules at low frequency
+                        let mut prm = prm.write().unwrap();
+                        prm.clear_all();
+                        let count = prm.add_rules_by_file(proxy_rules_file.as_str());
+
+                        info!(
+                            "updated proxy rules from file: {}, rules updated: {}",
+                            proxy_rules_file, count
+                        );
+                    }
+                    Ok(Ok(_)) | Ok(Err(_)) => {
+                        // do nothing
+                    }
+                    Err(_) => {
+                        info!("quit loop for watching the proxy rules file");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn post_stat<T>(&mut self, stat: Stat<T>)
+    where
+        T: ?Sized + Serialize,
+    {
+        if self.stat_enabled {
+            self.stat_bridge.post_stat(&stat);
+        }
+    }
+
+    pub fn set_stat_callback(&mut self, callback: impl FnMut(&str) + 'static) {
+        self.stat_bridge.set_callback(callback);
+    }
+
+    pub fn has_stat_callback(&self) -> bool {
+        self.stat_bridge.has_callback()
+    }
+
+    pub fn set_enable_stat(&mut self, enable: bool) {
+        self.stat_enabled = enable
     }
 }
