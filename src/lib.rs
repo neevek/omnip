@@ -56,7 +56,6 @@ pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
 pub mod android {
     extern crate jni;
 
-    use jni::objects::JObject;
     use jni::sys::jlong;
 
     use self::jni::objects::{JClass, JString};
@@ -74,7 +73,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeInitLogger(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxyKt_nativeInitLogger(
         env: JNIEnv,
         _: JClass,
         jlogLevel: JString,
@@ -144,9 +143,13 @@ pub mod android {
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStart(
         _env: JNIEnv,
-        _: JObject,
+        _: JClass,
         server_ptr: jlong,
     ) {
+        if server_ptr == 0 {
+            return;
+        }
+
         let server = &mut *(server_ptr as *mut Server);
         if server.has_scheduled_start() {
             return;
@@ -162,9 +165,13 @@ pub mod android {
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeIsRunning(
         _env: JNIEnv,
-        _: JObject,
+        _: JClass,
         server_ptr: jlong,
     ) -> jboolean {
+        if server_ptr == 0 {
+            return false as jboolean;
+        }
+
         let server = &mut *(server_ptr as *mut Server);
         server.is_running() as jboolean
     }
@@ -172,19 +179,25 @@ pub mod android {
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStop(
         _env: JNIEnv,
-        _: JObject,
+        _: JClass,
         server_ptr: jlong,
     ) {
-        let _boxed_server = Box::from_raw(server_ptr as *mut Server);
+        if server_ptr != 0 {
+            let _boxed_server = Box::from_raw(server_ptr as *mut Server);
+        }
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetEnableStat(
         env: JNIEnv,
-        jobj: JObject,
+        jobj: JClass,
         server_ptr: jlong,
         enable: jboolean,
     ) {
+        if server_ptr == 0 {
+            return;
+        }
+
         let server = &mut *(server_ptr as *mut Server);
         if !server.has_stat_callback() {
             let jvm = env.get_java_vm().unwrap();
