@@ -25,9 +25,9 @@ fn main() {
     };
 
     let mut server = Server::new(config);
-    server.set_enable_stat(true);
-    server.set_stat_callback(|data: &str| {
-        info!("Server Stat: {}", data);
+    server.set_enable_on_info_report(true);
+    server.set_on_info_listener(|data: &str| {
+        info!("Server Info: {}", data);
     });
     server.start_and_block().ok();
 }

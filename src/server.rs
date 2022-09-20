@@ -1,4 +1,4 @@
-use crate::stat::{Stat, StatBridge, StatType};
+use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType};
 use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
@@ -43,8 +43,8 @@ pub struct Server {
     watcher: Option<Box<dyn Watcher>>,
     scheduled_start: bool,
     is_running: Mutex<bool>,
-    stat_bridge: StatBridge,
-    stat_enabled: bool,
+    server_info_bridge: ServerInfoBridge,
+    on_info_report_enabled: bool,
 }
 
 impl Server {
@@ -58,8 +58,8 @@ impl Server {
             watcher: None,
             scheduled_start: false,
             is_running: Mutex::new(false),
-            stat_bridge: StatBridge::new(),
-            stat_enabled: false,
+            server_info_bridge: ServerInfoBridge::new(),
+            on_info_report_enabled: false,
         }
     }
 
@@ -115,7 +115,10 @@ impl Server {
             log_and_bail!("bind the server first");
         }
 
-        self.post_stat(Stat::new(StatType::ServerState, Box::new("Resoving DNS")));
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::ServerState,
+            Box::new("Resoving DNS"),
+        ));
 
         let resolver = Arc::new(
             rs_utilities::dns::resolver(
@@ -130,8 +133,8 @@ impl Server {
             .await,
         );
 
-        self.post_stat(Stat::new(
-            StatType::DNSResolverType,
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::DNSResolverType,
             Box::new(resolver.resolver_type().to_string()),
         ));
 
@@ -139,7 +142,10 @@ impl Server {
 
         info!("started listening, addr: {}", self.config.addr);
 
-        self.post_stat(Stat::new(StatType::ServerState, Box::new("Running")));
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::ServerState,
+            Box::new("Running"),
+        ));
 
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
@@ -435,24 +441,24 @@ impl Server {
         Ok(())
     }
 
-    fn post_stat<T>(&mut self, stat: Stat<T>)
+    fn post_server_info<T>(&mut self, server_info: ServerInfo<T>)
     where
         T: ?Sized + Serialize,
     {
-        if self.stat_enabled {
-            self.stat_bridge.post_stat(&stat);
+        if self.on_info_report_enabled {
+            self.server_info_bridge.post_server_info(&server_info);
         }
     }
 
-    pub fn set_stat_callback(&mut self, callback: impl FnMut(&str) + 'static) {
-        self.stat_bridge.set_callback(callback);
+    pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static) {
+        self.server_info_bridge.set_listener(callback);
     }
 
-    pub fn has_stat_callback(&self) -> bool {
-        self.stat_bridge.has_callback()
+    pub fn has_on_info_listener(&self) -> bool {
+        self.server_info_bridge.has_listener()
     }
 
-    pub fn set_enable_stat(&mut self, enable: bool) {
-        self.stat_enabled = enable
+    pub fn set_enable_on_info_report(&mut self, enable: bool) {
+        self.on_info_report_enabled = enable
     }
 }

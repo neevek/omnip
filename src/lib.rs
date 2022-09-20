@@ -1,7 +1,7 @@
 mod http_parser;
 mod proxy_rule_manager;
 mod server;
-mod stat;
+mod server_info_bridge;
 
 use anyhow::Result;
 use byte_pool::BytePool;
@@ -188,7 +188,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetEnableStat(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetEnableOnInfoReport(
         env: JNIEnv,
         jobj: JClass,
         server_ptr: jlong,
@@ -199,24 +199,24 @@ pub mod android {
         }
 
         let server = &mut *(server_ptr as *mut Server);
-        if !server.has_stat_callback() {
+        if !server.has_on_info_listener() {
             let jvm = env.get_java_vm().unwrap();
             let jobj_global_ref = env.new_global_ref(jobj).unwrap();
-            server.set_stat_callback(move |data: &str| {
+            server.set_on_info_listener(move |data: &str| {
                 let env = jvm.attach_current_thread().unwrap();
                 if let Ok(s) = env.new_string(data) {
                     env.call_method(
                         &jobj_global_ref,
-                        "onStat",
+                        "onInfo",
                         "(Ljava/lang/String;)V",
                         &[s.into()],
                     )
                     .unwrap();
                 }
             });
-            server.set_enable_stat(true);
+            server.set_enable_on_info_report(true);
         }
 
-        server.set_enable_stat(enable != 0);
+        server.set_enable_on_info_report(enable != 0);
     }
 }
