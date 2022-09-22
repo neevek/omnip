@@ -1,9 +1,18 @@
+use std::sync::{Arc, Mutex};
+
 use serde::Serialize;
+
+#[derive(Serialize)]
+pub(crate) struct TrafficData {
+    pub incoming_bytes: u64,
+    pub outgoing_bytes: u64,
+}
 
 #[derive(Serialize)]
 pub(crate) enum ServerInfoType {
     DNSResolverType,
     ServerState,
+    Traffic,
 }
 
 #[derive(Serialize)]
@@ -24,8 +33,9 @@ where
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ServerInfoBridge {
-    listener: Option<Box<dyn FnMut(&str)>>,
+    listener: Option<Arc<Mutex<dyn FnMut(&str) + 'static + Send + Sync>>>,
 }
 
 impl ServerInfoBridge {
@@ -33,21 +43,21 @@ impl ServerInfoBridge {
         ServerInfoBridge { listener: None }
     }
 
-    pub(crate) fn set_listener(&mut self, listener: impl FnMut(&str) + 'static) {
-        self.listener = Some(Box::new(listener));
+    pub(crate) fn set_listener(&mut self, listener: impl FnMut(&str) + 'static + Send + Sync) {
+        self.listener = Some(Arc::new(Mutex::new(listener)));
     }
 
     pub(crate) fn has_listener(&self) -> bool {
         self.listener.is_some()
     }
 
-    pub(crate) fn post_server_info<T>(&mut self, data: &ServerInfo<T>)
+    pub(crate) fn post_server_info<T>(&self, data: &ServerInfo<T>)
     where
         T: ?Sized + Serialize,
     {
-        if let Some(ref mut listener) = self.listener {
+        if let Some(ref listener) = self.listener {
             if let Ok(json) = serde_json::to_string(data) {
-                listener(json.as_str());
+                listener.lock().unwrap()(json.as_str());
             }
         }
     }

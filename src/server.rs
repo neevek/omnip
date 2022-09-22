@@ -1,4 +1,4 @@
-use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType};
+use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, TrafficData};
 use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
@@ -13,8 +13,9 @@ use std::cmp::min;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str;
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -147,6 +148,9 @@ impl Server {
             Box::new("Running"),
         ));
 
+        let (traffic_data_sender, traffic_data_receiver) = channel::<TrafficData>(10);
+        self.collect_and_report_traffic_data(traffic_data_receiver);
+
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
             match listener.accept().await {
@@ -160,6 +164,7 @@ impl Server {
                     let buffer_pool = self.buffer_pool.clone();
                     let downstream_addr = self.config.downstream_addr;
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
+                    let traffic_data_sender = traffic_data_sender.clone();
                     tokio::spawn(async move {
                         Self::process_stream(
                             resolver,
@@ -167,6 +172,7 @@ impl Server {
                             upstream,
                             downstream_addr,
                             proxy_rule_manager,
+                            traffic_data_sender,
                         )
                         .await
                         .map_err(|e| match e {
@@ -196,12 +202,13 @@ impl Server {
         *self.is_running.lock().unwrap()
     }
 
-    pub async fn process_stream(
+    async fn process_stream(
         resolver: Arc<DNSResolver>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
+        traffic_data_sender: Sender<TrafficData>,
     ) -> Result<(), ProxyError> {
         let mut buf = buffer_pool.alloc(MAX_CLIENT_HEADER_SIZE);
         let mut total_read = 0;
@@ -253,10 +260,23 @@ impl Server {
                     );
                     if let Ok(mut downstream) = TcpStream::connect(downstream_addr).await {
                         Self::write_to_stream(&mut downstream, &buf[..total_read]).await?;
-                        Self::start_stream_transfer(&mut downstream, &mut upstream)
+                        Self::start_stream_transfer(
+                            &mut upstream,
+                            &mut downstream,
+                            &traffic_data_sender,
+                        )
+                        .await
+                        .ok();
+
+                        traffic_data_sender
+                            .send(TrafficData {
+                                outgoing_bytes: total_read as u64,
+                                incoming_bytes: 0,
+                            })
                             .await
                             .ok();
                     }
+
                     return Ok(());
                 }
             }
@@ -303,7 +323,22 @@ impl Server {
                         }
                     }
 
-                    return Self::start_stream_transfer(&mut downstream, &mut upstream).await;
+                    Self::start_stream_transfer(
+                        &mut upstream,
+                        &mut downstream,
+                        &traffic_data_sender,
+                    )
+                    .await?;
+
+                    traffic_data_sender
+                        .send(TrafficData {
+                            outgoing_bytes: total_read as u64,
+                            incoming_bytes: 0,
+                        })
+                        .await
+                        .ok();
+
+                    return Ok(());
                 }
             }
 
@@ -350,24 +385,69 @@ impl Server {
     async fn start_stream_transfer(
         a_stream: &mut TcpStream,
         b_stream: &mut TcpStream,
-    ) -> Result<(), ProxyError> {
-        loop {
-            // copy data until error
-            let (a_bytes, b_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
-                .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
-                .await?;
-            debug!(
-                "transfer, in:{}, out:{}, {:?} <-> {:?}",
-                a_bytes,
-                b_bytes,
-                a_stream.local_addr(),
-                b_stream.local_addr()
-            );
-            if a_bytes == 0 && b_bytes == 0 {
-                break;
+        traffic_data_sender: &Sender<TrafficData>,
+    ) -> Result<TrafficData, ProxyError> {
+        let (outgoing_bytes, incoming_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
+            .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
+            .await?;
+
+        debug!(
+            "transfer, out:{}, in:{}, {:?} <-> {:?}",
+            outgoing_bytes,
+            outgoing_bytes,
+            a_stream.local_addr(),
+            b_stream.local_addr()
+        );
+
+        traffic_data_sender
+            .send(TrafficData {
+                outgoing_bytes,
+                incoming_bytes,
+            })
+            .await
+            .ok();
+
+        Ok(TrafficData {
+            incoming_bytes,
+            outgoing_bytes,
+        })
+    }
+
+    fn collect_and_report_traffic_data(
+        &mut self,
+        mut traffic_data_receiver: Receiver<TrafficData>,
+    ) {
+        let server_info_bridge = self.server_info_bridge.clone();
+        tokio::spawn(async move {
+            let mut total_incoming_bytes = 0;
+            let mut total_outgoing_bytes = 0;
+            let mut last_elapsed_time = 0;
+            let start_time = SystemTime::now();
+            while let Some(TrafficData {
+                incoming_bytes,
+                outgoing_bytes,
+            }) = traffic_data_receiver.recv().await
+            {
+                total_incoming_bytes += incoming_bytes;
+                total_outgoing_bytes += outgoing_bytes;
+
+                if let Ok(elpased) = start_time.elapsed() {
+                    // report traffic data every 10 seconds
+                    let elapsed_time = elpased.as_secs();
+                    if elapsed_time - last_elapsed_time > 10 {
+                        last_elapsed_time = elapsed_time;
+                        server_info_bridge.post_server_info(&ServerInfo::new(
+                            ServerInfoType::Traffic,
+                            Box::new(TrafficData {
+                                incoming_bytes: total_incoming_bytes,
+                                outgoing_bytes: total_outgoing_bytes,
+                            }),
+                        ));
+                    }
+                }
             }
-        }
-        Ok(())
+            info!("quit collecting traffic data");
+        });
     }
 
     fn setup_proxy_rules_manager(&mut self) -> Result<()> {
@@ -394,7 +474,7 @@ impl Server {
     }
 
     fn watch_proxy_rules_file(&mut self, proxy_rules_file: String) -> Result<()> {
-        let (tx, rx) = channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(
             move |res| {
                 tx.send(res).ok();
@@ -450,7 +530,7 @@ impl Server {
         }
     }
 
-    pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static) {
+    pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static + Send + Sync) {
         self.server_info_bridge.set_listener(callback);
     }
 
