@@ -413,10 +413,7 @@ impl Server {
         })
     }
 
-    fn collect_and_report_traffic_data(
-        &mut self,
-        mut traffic_data_receiver: Receiver<TrafficData>,
-    ) {
+    fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<TrafficData>) {
         let server_info_bridge = self.server_info_bridge.clone();
         tokio::spawn(async move {
             let mut total_incoming_bytes = 0;
@@ -521,7 +518,7 @@ impl Server {
         Ok(())
     }
 
-    fn post_server_info<T>(&mut self, server_info: ServerInfo<T>)
+    fn post_server_info<T>(&self, server_info: ServerInfo<T>)
     where
         T: ?Sized + Serialize,
     {
