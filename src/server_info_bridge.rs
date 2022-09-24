@@ -4,8 +4,8 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub(crate) struct TrafficData {
-    pub incoming_bytes: u64,
-    pub outgoing_bytes: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
 }
 
 #[derive(Serialize)]

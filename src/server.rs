@@ -10,10 +10,11 @@ use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
 use std::cmp::min;
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{
@@ -26,6 +27,7 @@ const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n\r\n";
 const HTTP_RESP_400: &[u8] = b"HTTP/1.1 300 Bad Request\r\nServer: rsp\r\n\r\n";
 const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
+const POST_TRAFFIC_DATA_INTERVAL_SECS: u64 = 10;
 
 #[derive(Debug)]
 pub enum ProxyError {
@@ -33,6 +35,27 @@ pub enum ProxyError {
     PayloadTooLarge,
     BadGateway(anyhow::Error),
     Disconnected(anyhow::Error),
+}
+
+#[derive(Clone, Serialize)]
+pub enum ServerState {
+    Idle = 0,
+    Preparing,
+    ResolvingDNS,
+    Running,
+    Terminated,
+}
+
+impl Display for ServerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerState::Idle => write!(f, "Idle"),
+            ServerState::Preparing => write!(f, "Preparing"),
+            ServerState::ResolvingDNS => write!(f, "ResolvingDNS"),
+            ServerState::Running => write!(f, "Running"),
+            ServerState::Terminated => write!(f, "Terminated"),
+        }
+    }
 }
 
 pub struct Server {
@@ -43,9 +66,9 @@ pub struct Server {
     resolver: Option<Arc<DNSResolver>>,
     watcher: Option<Box<dyn Watcher>>,
     scheduled_start: bool,
-    is_running: Mutex<bool>,
     server_info_bridge: ServerInfoBridge,
     on_info_report_enabled: bool,
+    state: ServerState,
 }
 
 impl Server {
@@ -58,9 +81,9 @@ impl Server {
             resolver: None,
             watcher: None,
             scheduled_start: false,
-            is_running: Mutex::new(false),
             server_info_bridge: ServerInfoBridge::new(),
             on_info_report_enabled: false,
+            state: ServerState::Idle,
         }
     }
 
@@ -82,7 +105,7 @@ impl Server {
         };
         info!("will use {} worker threads", worker_threads);
 
-        *self.is_running.lock().unwrap() = true;
+        self.set_and_post_server_state(ServerState::Preparing);
 
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -94,7 +117,7 @@ impl Server {
                 self.serve().await.ok();
             });
 
-        *self.is_running.lock().unwrap() = false;
+        self.set_and_post_server_state(ServerState::Terminated);
 
         Ok(())
     }
@@ -116,10 +139,7 @@ impl Server {
             log_and_bail!("bind the server first");
         }
 
-        self.post_server_info(ServerInfo::new(
-            ServerInfoType::ServerState,
-            Box::new("Resoving DNS"),
-        ));
+        self.set_and_post_server_state(ServerState::ResolvingDNS);
 
         let resolver = Arc::new(
             rs_utilities::dns::resolver(
@@ -143,10 +163,7 @@ impl Server {
 
         info!("started listening, addr: {}", self.config.addr);
 
-        self.post_server_info(ServerInfo::new(
-            ServerInfoType::ServerState,
-            Box::new("Running"),
-        ));
+        self.set_and_post_server_state(ServerState::Running);
 
         let (traffic_data_sender, traffic_data_receiver) = channel::<TrafficData>(10);
         self.collect_and_report_traffic_data(traffic_data_receiver);
@@ -155,11 +172,6 @@ impl Server {
         loop {
             match listener.accept().await {
                 Ok((upstream, _addr)) => {
-                    if !*self.is_running.lock().unwrap() {
-                        info!("proxy server quit");
-                        break;
-                    }
-
                     let resolver = self.resolver.as_ref().unwrap().clone();
                     let buffer_pool = self.buffer_pool.clone();
                     let downstream_addr = self.config.downstream_addr;
@@ -190,16 +202,14 @@ impl Server {
                 }
             }
         }
-
-        Ok(())
     }
 
     pub fn has_scheduled_start(&self) -> bool {
         self.scheduled_start
     }
 
-    pub fn is_running(&self) -> bool {
-        *self.is_running.lock().unwrap()
+    pub fn get_state(&self) -> ServerState {
+        self.state.clone()
     }
 
     async fn process_stream(
@@ -270,8 +280,8 @@ impl Server {
 
                         traffic_data_sender
                             .send(TrafficData {
-                                outgoing_bytes: total_read as u64,
-                                incoming_bytes: 0,
+                                tx_bytes: total_read as u64,
+                                rx_bytes: 0,
                             })
                             .await
                             .ok();
@@ -332,8 +342,8 @@ impl Server {
 
                     traffic_data_sender
                         .send(TrafficData {
-                            outgoing_bytes: total_read as u64,
-                            incoming_bytes: 0,
+                            tx_bytes: total_read as u64,
+                            rx_bytes: 0,
                         })
                         .await
                         .ok();
@@ -387,57 +397,48 @@ impl Server {
         b_stream: &mut TcpStream,
         traffic_data_sender: &Sender<TrafficData>,
     ) -> Result<TrafficData, ProxyError> {
-        let (outgoing_bytes, incoming_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
+        let (tx_bytes, rx_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
             .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
             .await?;
 
         debug!(
             "transfer, out:{}, in:{}, {:?} <-> {:?}",
-            outgoing_bytes,
-            outgoing_bytes,
+            tx_bytes,
+            tx_bytes,
             a_stream.local_addr(),
             b_stream.local_addr()
         );
 
         traffic_data_sender
-            .send(TrafficData {
-                outgoing_bytes,
-                incoming_bytes,
-            })
+            .send(TrafficData { tx_bytes, rx_bytes })
             .await
             .ok();
 
-        Ok(TrafficData {
-            incoming_bytes,
-            outgoing_bytes,
-        })
+        Ok(TrafficData { rx_bytes, tx_bytes })
     }
 
     fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<TrafficData>) {
         let server_info_bridge = self.server_info_bridge.clone();
         tokio::spawn(async move {
-            let mut total_incoming_bytes = 0;
-            let mut total_outgoing_bytes = 0;
+            let mut total_rx_bytes = 0;
+            let mut total_tx_bytes = 0;
             let mut last_elapsed_time = 0;
             let start_time = SystemTime::now();
-            while let Some(TrafficData {
-                incoming_bytes,
-                outgoing_bytes,
-            }) = traffic_data_receiver.recv().await
+            while let Some(TrafficData { rx_bytes, tx_bytes }) = traffic_data_receiver.recv().await
             {
-                total_incoming_bytes += incoming_bytes;
-                total_outgoing_bytes += outgoing_bytes;
+                total_rx_bytes += rx_bytes;
+                total_tx_bytes += tx_bytes;
 
                 if let Ok(elpased) = start_time.elapsed() {
                     // report traffic data every 10 seconds
                     let elapsed_time = elpased.as_secs();
-                    if elapsed_time - last_elapsed_time > 10 {
+                    if elapsed_time - last_elapsed_time > POST_TRAFFIC_DATA_INTERVAL_SECS {
                         last_elapsed_time = elapsed_time;
                         server_info_bridge.post_server_info(&ServerInfo::new(
                             ServerInfoType::Traffic,
                             Box::new(TrafficData {
-                                incoming_bytes: total_incoming_bytes,
-                                outgoing_bytes: total_outgoing_bytes,
+                                rx_bytes: total_rx_bytes,
+                                tx_bytes: total_tx_bytes,
                             }),
                         ));
                     }
@@ -518,6 +519,15 @@ impl Server {
         Ok(())
     }
 
+    fn set_and_post_server_state(&mut self, state: ServerState) {
+        info!("client state: {}", state);
+        self.state = state;
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::ServerState,
+            Box::new(self.state.to_string()),
+        ));
+    }
+
     fn post_server_info<T>(&self, server_info: ServerInfo<T>)
     where
         T: ?Sized + Serialize,
@@ -536,6 +546,7 @@ impl Server {
     }
 
     pub fn set_enable_on_info_report(&mut self, enable: bool) {
+        info!("set_enable_on_info_report, enable:{}", enable);
         self.on_info_report_enabled = enable
     }
 }

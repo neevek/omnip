@@ -56,7 +56,7 @@ pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
 pub mod android {
     extern crate jni;
 
-    use jni::sys::jlong;
+    use jni::sys::{jlong, jstring};
 
     use self::jni::objects::{JClass, JString};
     use self::jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6};
@@ -163,17 +163,19 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeIsRunning(
-        _env: JNIEnv,
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeGetState(
+        env: JNIEnv,
         _: JClass,
         server_ptr: jlong,
-    ) -> jboolean {
+    ) -> jstring {
         if server_ptr == 0 {
-            return false as jboolean;
+            return env.new_string("").unwrap().into_inner();
         }
 
         let server = &mut *(server_ptr as *mut Server);
-        server.is_running() as jboolean
+        env.new_string(server.get_state().to_string())
+            .unwrap()
+            .into_inner()
     }
 
     #[no_mangle]
@@ -199,7 +201,8 @@ pub mod android {
         }
 
         let server = &mut *(server_ptr as *mut Server);
-        if !server.has_on_info_listener() {
+        let bool_enable = enable == 1;
+        if bool_enable && !server.has_on_info_listener() {
             let jvm = env.get_java_vm().unwrap();
             let jobj_global_ref = env.new_global_ref(jobj).unwrap();
             server.set_on_info_listener(move |data: &str| {
@@ -214,9 +217,8 @@ pub mod android {
                     .unwrap();
                 }
             });
-            server.set_enable_on_info_report(true);
         }
 
-        server.set_enable_on_info_report(enable != 0);
+        server.set_enable_on_info_report(bool_enable);
     }
 }
