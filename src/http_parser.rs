@@ -28,20 +28,27 @@ impl HttpRequest {
         }
 
         if let Some(addr) = addr {
-            let start_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind(']') {
-                ipv6_end_bracket_pos + 1
+            let ipv6_end_bracket_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind(']') {
+                ipv6_end_bracket_pos
             } else {
                 0
             };
-
-            let host;
             let mut port = None;
-            if let Some(pos) = addr[start_pos..].find(':') {
-                host = addr[..pos].to_string();
+            let mut host_start_pos = 0;
+            let mut host_end_pos;
+            if let Some(pos) = addr[ipv6_end_bracket_pos..].find(':') {
                 port = addr[(pos + 1)..].parse().ok();
+                host_end_pos = pos;
             } else {
-                host = addr.to_string();
+                host_end_pos = addr.len();
             }
+
+            if ipv6_end_bracket_pos > 0 {
+                // exclude the square brackets
+                host_start_pos = 1;
+                host_end_pos = ipv6_end_bracket_pos;
+            }
+            let host = &addr[host_start_pos..host_end_pos];
 
             if port.is_none() {
                 port = if self.url.starts_with("https") {
@@ -52,7 +59,7 @@ impl HttpRequest {
             }
 
             return Some(NetAddr {
-                host,
+                host: host.to_string(),
                 port: port.unwrap(),
             });
         }
@@ -61,7 +68,14 @@ impl HttpRequest {
         let url = Url::parse(&self.url);
         if let Ok(url) = url {
             if url.scheme().starts_with("http") {
-                let host = url.host_str()?.to_string();
+                let mut host = url.host_str()?;
+                if host.is_empty() {
+                    error!("invalid request: {}", url);
+                    return None;
+                }
+                if host.bytes().nth(0).unwrap_or(b' ') == b'[' {
+                    host = &host[1..(host.len() - 1)];
+                }
                 let mut port = url.port().unwrap_or(0);
                 if port == 0 {
                     port = if url.scheme().starts_with("https") {
@@ -71,7 +85,10 @@ impl HttpRequest {
                     }
                 }
 
-                return Some(NetAddr { host, port });
+                return Some(NetAddr {
+                    host: host.to_string(),
+                    port,
+                });
             }
         }
 
