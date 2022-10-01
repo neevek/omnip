@@ -28,6 +28,7 @@ const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n
 const HTTP_RESP_400: &[u8] = b"HTTP/1.1 300 Bad Request\r\nServer: rsp\r\n\r\n";
 const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
 const POST_TRAFFIC_DATA_INTERVAL_SECS: u64 = 10;
+const TRAFFIC_DATA_QUEUE_SIZE: usize = 100;
 
 #[derive(Debug)]
 pub enum ProxyError {
@@ -92,7 +93,10 @@ impl Server {
     }
 
     pub fn start_and_block(&mut self) -> Result<()> {
-        self.setup_proxy_rules_manager()?;
+        if self.config.watch_proxy_rules_change {
+            info!("will watch proxy rules change");
+            self.setup_proxy_rules_manager()?;
+        }
 
         if let Some(addr) = self.config.downstream_addr {
             info!("using downstream: {}", addr);
@@ -165,7 +169,8 @@ impl Server {
 
         self.set_and_post_server_state(ServerState::Running);
 
-        let (traffic_data_sender, traffic_data_receiver) = channel::<TrafficData>(10);
+        let (traffic_data_sender, traffic_data_receiver) =
+            channel::<TrafficData>(TRAFFIC_DATA_QUEUE_SIZE);
         self.collect_and_report_traffic_data(traffic_data_receiver);
 
         let listener = self.tcp_listener.as_ref().unwrap();

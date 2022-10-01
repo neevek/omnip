@@ -37,6 +37,7 @@ pub struct Config {
     pub threads: usize,
     pub dot_server: String,
     pub name_servers: String,
+    pub watch_proxy_rules_change: bool,
 }
 
 pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
@@ -73,7 +74,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxyKt_nativeInitLogger(
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeInitLogger(
         env: JNIEnv,
         _: JClass,
         jlogLevel: JString,
@@ -135,6 +136,7 @@ pub mod android {
             threads: jthreads as usize,
             dot_server: dotServer,
             name_servers: nameServers,
+            watch_proxy_rules_change: false,
         };
 
         Box::into_raw(Box::new(Server::new(config))) as jlong

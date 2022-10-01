@@ -1,5 +1,5 @@
 use clap::Parser;
-use log::{error, info};
+use log::error;
 use rsproxy::*;
 
 extern crate pretty_env_logger;
@@ -22,13 +22,14 @@ fn main() {
         threads: args.threads,
         dot_server: args.dot_server,
         name_servers: args.name_servers,
+        watch_proxy_rules_change: args.watch_proxy_rules_change,
     };
 
     let mut server = Server::new(config);
-    server.set_enable_on_info_report(true);
-    server.set_on_info_listener(|data: &str| {
-        info!("Server Info: {}", data);
-    });
+    // server.set_enable_on_info_report(true);
+    // server.set_on_info_listener(|data: &str| {
+    //     log::info!("Server Info: {}", data);
+    // });
     server.start_and_block().ok();
 }
 
@@ -59,6 +60,10 @@ struct RsproxyArgs {
     #[clap(long, default_value = "", display_order = 6)]
     name_servers: String,
 
-    #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 7)]
+    // reload proxy rules if updated
+    #[clap(short = 'w', long, action, display_order = 7)]
+    watch_proxy_rules_change: bool,
+
+    #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 8)]
     loglevel: String,
 }
