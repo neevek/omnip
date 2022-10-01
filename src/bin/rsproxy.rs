@@ -40,7 +40,7 @@ struct RsproxyArgs {
     #[clap(short = 'l', long, required = true, display_order = 1)]
     addr: String,
 
-    /// Downstream of current proxy server, e.g. -d [ip:]port
+    /// [ip:]port, downstream which the proxy server will relay traffic to based on proxy rules
     #[clap(short = 'd', long, default_value = "", display_order = 2)]
     downstream: String,
 
@@ -48,7 +48,7 @@ struct RsproxyArgs {
     #[clap(short = 'r', long, default_value = "", display_order = 3)]
     proxy_rules_file: String,
 
-    /// Threads to run async tasks
+    /// Threads to run async tasks, default to number of cpu cores
     #[clap(short = 't', long, default_value = "0", display_order = 4)]
     threads: usize,
 
@@ -56,11 +56,11 @@ struct RsproxyArgs {
     #[clap(long, default_value = "", display_order = 5)]
     dot_server: String,
 
-    /// comma saprated domain servers (E.g. 1.1.1.1,8.8.8.8), will be used if no dot_server is specified, or system default if empty
+    /// comma saprated domain servers (E.g. 1.1.1.1,8.8.8.8), which will be used if no dot_server is specified, or system default if empty
     #[clap(long, default_value = "", display_order = 6)]
     name_servers: String,
 
-    // reload proxy rules if updated
+    /// reload proxy rules if updated
     #[clap(short = 'w', long, action, display_order = 7)]
     watch_proxy_rules_change: bool,
 

@@ -1,3 +1,9 @@
+/// some simple rules are supported:
+/// example.com
+/// .example.com
+/// ||example.com
+/// @@||example.com
+/// @@|example.com
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
