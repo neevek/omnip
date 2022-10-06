@@ -93,10 +93,7 @@ impl Server {
     }
 
     pub fn start_and_block(&mut self) -> Result<()> {
-        if self.config.watch_proxy_rules_change {
-            info!("will watch proxy rules change");
-            self.setup_proxy_rules_manager()?;
-        }
+        self.setup_proxy_rules_manager()?;
 
         if let Some(addr) = self.config.downstream_addr {
             info!("using downstream: {}", addr);
@@ -469,8 +466,12 @@ impl Server {
             );
 
             self.proxy_rule_manager = Some(Arc::new(RwLock::new(prm)));
-            self.watch_proxy_rules_file(proxy_rules_file.to_string())
-                .ok();
+
+            if self.config.watch_proxy_rules_change {
+                info!("will watch proxy rules change");
+                self.watch_proxy_rules_file(proxy_rules_file.to_string())
+                    .ok();
+            }
         }
 
         Ok(())
