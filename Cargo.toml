@@ -1,6 +1,6 @@
 [package]
 name = "rsproxy"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 
 [lib]
@@ -36,3 +36,9 @@ android_logger = "0.10"
 
 ######### build shared lib for android ###########
 # cargo build --target=aarch64-linux-android --release --lib
+
+[profile.release]
+opt-level = "z"
+strip = true
+panic = "abort"
+#lto = "fat"
