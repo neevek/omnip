@@ -30,6 +30,9 @@ const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
 const POST_TRAFFIC_DATA_INTERVAL_SECS: u64 = 10;
 const TRAFFIC_DATA_QUEUE_SIZE: usize = 100;
 
+const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
+    [".home", ".lan", ".corp", ".intranet", ".private"];
+
 #[derive(Debug)]
 pub enum ProxyError {
     BadRequest,
@@ -65,6 +68,7 @@ pub struct Server {
     buffer_pool: BufferPool,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     resolver: Option<Arc<DNSResolver>>,
+    system_resolver: Option<Arc<DNSResolver>>,
     watcher: Option<Box<dyn Watcher>>,
     scheduled_start: bool,
     server_info_bridge: ServerInfoBridge,
@@ -80,6 +84,7 @@ impl Server {
             buffer_pool: crate::new_buffer_pool(),
             proxy_rule_manager: None,
             resolver: None,
+            system_resolver: None,
             watcher: None,
             scheduled_start: false,
             server_info_bridge: ServerInfoBridge::new(),
@@ -155,12 +160,18 @@ impl Server {
             .await,
         );
 
+        let system_resolver = Arc::new(rs_utilities::dns::system_resolver(
+            3,
+            rs_utilities::dns::DNSQueryOrdering::UserProvidedOrder,
+        ));
+
         self.post_server_info(ServerInfo::new(
             ServerInfoType::DNSResolverType,
             Box::new(resolver.resolver_type().to_string()),
         ));
 
         self.resolver = Some(resolver);
+        self.system_resolver = Some(system_resolver);
 
         info!("started listening, addr: {}", self.config.addr);
 
@@ -175,6 +186,7 @@ impl Server {
             match listener.accept().await {
                 Ok((upstream, _addr)) => {
                     let resolver = self.resolver.as_ref().unwrap().clone();
+                    let system_resolver = self.system_resolver.as_ref().unwrap().clone();
                     let buffer_pool = self.buffer_pool.clone();
                     let downstream_addr = self.config.downstream_addr;
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
@@ -182,6 +194,7 @@ impl Server {
                     tokio::spawn(async move {
                         Self::process_stream(
                             resolver,
+                            system_resolver,
                             buffer_pool,
                             upstream,
                             downstream_addr,
@@ -216,6 +229,7 @@ impl Server {
 
     async fn process_stream(
         resolver: Arc<DNSResolver>,
+        system_resolver: Arc<DNSResolver>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
         downstream_addr: Option<SocketAddr>,
@@ -292,6 +306,16 @@ impl Server {
                     return Ok(());
                 }
             }
+
+            let is_internal_domain = INTERNAL_DOMAIN_SURRFIX
+                .iter()
+                .any(|surrfix| addr.host.ends_with(surrfix));
+
+            let resolver = if is_internal_domain {
+                system_resolver
+            } else {
+                resolver
+            };
 
             let addrs: Vec<SocketAddr> = resolver
                 .lookup(&addr.host)
