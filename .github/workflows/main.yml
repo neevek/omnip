@@ -1,6 +1,9 @@
 name: Rust
 
-on: [push]
+on:
+  push:
+    tags:
+      - 'release/*'
 
 jobs:
   build:
