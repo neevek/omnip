@@ -6,23 +6,17 @@ on:
       - 'release/*'
 
 jobs:
-  build-linux-x86_64:
+  linux-x86_64:
+    name: Linux x86_64
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          default: true
+          target: x86_64-unknown-linux-gnu
           override: true
-
-      - name: Build
-        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-linux-x86_64
-
+      - run: cargo build --all-features --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-linux-x86_64
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -32,25 +26,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
-  build-darwin-x86_64:
+  darwin-x86_64:
+    name: Darwin x86_64
     runs-on: macos-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: x86_64-apple-darwin
-          default: true
           override: true
-
-      - name: Build for mac
-        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin-x86_64
-
+      - run: cargo build --all-features --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin-x86_64
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -59,30 +45,63 @@ jobs:
             target/release/rsproxy-darwin-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-darwin-arm64:
+            
+  darwin-aarch64:
+    name: Darwin Aarch64
     runs-on: macos-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: aarch64-apple-darwin
-          default: true
           override: true
-
-      - name: Build for mac
-        run: cargo build --all --release --target aarch64-apple-darwin && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin-aarch64
-
+      - run: rustup target add aarch64-apple-darwin && cargo build --all-features --release --target aarch64-apple-darwin && mv target/aarch64-apple-darwin/release/rsproxy target/aarch64-apple-darwin/release/rsproxy-darwin-aarch64
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/rsproxy-darwin-aarch64
+            target/aarch64-apple-darwin/release/rsproxy-darwin-aarch64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux-armv7:
+    name: Linux ARMv7
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: armv7-unknown-linux-gnueabihf
+          override: true
+      - run: rustup target add armv7-unknown-linux-gnueabihf && cargo install cross --git https://github.com/cross-rs/cross && cross build --all-features --release --target armv7-unknown-linux-gnueabihf && mv target/armv7-unknown-linux-gnueabihf/release/rsproxy target/armv7-unknown-linux-gnueabihf/release/rsproxy-linux-armv7
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            target/armv7-unknown-linux-gnueabihf/release/rsproxy-linux-armv7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux-aarch64:
+    name: Linux Aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-unknown-linux-gnu
+          override: true
+      - run: rustup target add aarch64-unknown-linux-gnu && cargo install cross --git https://github.com/cross-rs/cross && cross build --all-features --release --target aarch64-unknown-linux-gnu && mv target/aarch64-unknown-linux-gnu/release/rsproxy target/aarch64-unknown-linux-gnu/release/rsproxy-linux-aarch64
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            target/aarch64-unknown-linux-gnu/release/rsproxy-linux-aarch64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
