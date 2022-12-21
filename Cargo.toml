@@ -41,4 +41,4 @@ android_logger = "0.10"
 opt-level = "z"
 strip = true
 panic = "abort"
-#lto = "fat"
+lto = "fat"
