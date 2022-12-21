@@ -6,7 +6,7 @@ on:
       - 'release/*'
 
 jobs:
-  build:
+  build-linux-x86_64:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,18 +21,19 @@ jobs:
           override: true
 
       - name: Build
-        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-amd64
+        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-linux-x86_64
 
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/rsproxy-amd64
+            target/release/rsproxy-linux-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-mac:
+
+  build-darwin-x86_64:
     runs-on: macos-latest
 
     steps:
@@ -48,13 +49,40 @@ jobs:
           override: true
 
       - name: Build for mac
-        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin
+        run: cargo build --all --release && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin-x86_64
 
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/rsproxy-darwin
+            target/release/rsproxy-darwin-x86_64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-darwin-arm64:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+
+      - name: Install latest rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-apple-darwin
+          default: true
+          override: true
+
+      - name: Build for mac
+        run: cargo build --all --release --target aarch64-apple-darwin && strip target/release/rsproxy && mv target/release/rsproxy target/release/rsproxy-darwin-aarch64
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            target/release/rsproxy-darwin-aarch64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
