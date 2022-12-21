@@ -5,7 +5,7 @@ use futures_util::TryFutureExt;
 use log::{debug, error, info};
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use rs_utilities::dns::DNSResolver;
+use rs_utilities::dns::{DNSResolver, DNSResolverType};
 use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
@@ -160,10 +160,16 @@ impl Server {
             .await,
         );
 
-        let system_resolver = Arc::new(rs_utilities::dns::system_resolver(
-            3,
-            rs_utilities::dns::DNSQueryOrdering::UserProvidedOrder,
-        ));
+        // always need a system resolver to resolve local domains
+        let system_resolver = if resolver.resolver_type() == DNSResolverType::System {
+            resolver.clone()
+
+        } else {
+            Arc::new(rs_utilities::dns::system_resolver(
+                3,
+                rs_utilities::dns::DNSQueryOrdering::UserProvidedOrder,
+            ))
+        };
 
         self.post_server_info(ServerInfo::new(
             ServerInfoType::DNSResolverType,
