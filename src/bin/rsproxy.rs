@@ -15,9 +15,16 @@ fn main() {
         return;
     }
 
+    let (downstream_type, downstream_addr) = parse_downstream_addr(args.downstream.as_str());
+    if !args.downstream.is_empty() && downstream_type.is_none() {
+        error!("invalid downstream address: {}", args.downstream);
+        return;
+    }
+
     let config = Config {
         addr: addr.unwrap(),
-        downstream_addr: parse_sock_addr(args.downstream.as_str()),
+        downstream_type,
+        downstream_addr,
         proxy_rules_file: args.proxy_rules_file,
         threads: args.threads,
         dot_server: args.dot_server,

@@ -1,6 +1,12 @@
+use crate::http_parser::HttpRequest;
 use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, TrafficData};
-use crate::{http_parser, BufferPool, Config, NetAddr, ProxyRuleManager};
+use crate::socks::socks_client::SocksClient;
+use crate::socks::SocksVersion;
+use crate::{
+    http_parser, utils, BufferPool, Config, DownstreamType, NetAddr, ProxyError, ProxyRuleManager,
+};
 use anyhow::{anyhow, bail, Context, Result};
+use byte_pool::Block;
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
 use notify::event::ModifyKind;
@@ -18,7 +24,7 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncReadExt,
     net::{TcpListener, TcpStream},
 };
 
@@ -32,14 +38,6 @@ const TRAFFIC_DATA_QUEUE_SIZE: usize = 100;
 
 const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
     [".home", ".lan", ".corp", ".intranet", ".private"];
-
-#[derive(Debug)]
-pub enum ProxyError {
-    BadRequest,
-    PayloadTooLarge,
-    BadGateway(anyhow::Error),
-    Disconnected(anyhow::Error),
-}
 
 #[derive(Clone, Serialize)]
 pub enum ServerState {
@@ -163,7 +161,6 @@ impl Server {
         // always need a system resolver to resolve local domains
         let system_resolver = if resolver.resolver_type() == DNSResolverType::System {
             resolver.clone()
-
         } else {
             Arc::new(rs_utilities::dns::system_resolver(
                 3,
@@ -194,7 +191,8 @@ impl Server {
                     let resolver = self.resolver.as_ref().unwrap().clone();
                     let system_resolver = self.system_resolver.as_ref().unwrap().clone();
                     let buffer_pool = self.buffer_pool.clone();
-                    let downstream_addr = self.config.downstream_addr;
+                    let downstream_type = self.config.downstream_type.clone();
+                    let downstream_addr = self.config.downstream_addr.clone();
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
                     let traffic_data_sender = traffic_data_sender.clone();
                     tokio::spawn(async move {
@@ -203,6 +201,7 @@ impl Server {
                             system_resolver,
                             buffer_pool,
                             upstream,
+                            downstream_type,
                             downstream_addr,
                             proxy_rule_manager,
                             traffic_data_sender,
@@ -238,6 +237,7 @@ impl Server {
         system_resolver: Arc<DNSResolver>,
         buffer_pool: BufferPool,
         mut upstream: TcpStream,
+        downstream_type: Option<DownstreamType>,
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
         traffic_data_sender: Sender<TrafficData>,
@@ -256,13 +256,13 @@ impl Server {
             let http_request = http_parser::parse(&buf[..total_read]);
             if http_request.is_none() {
                 if nread == 0 {
-                    Self::write_to_stream(&mut upstream, HTTP_RESP_400).await?;
+                    utils::write_to_stream(&mut upstream, HTTP_RESP_400).await?;
                     error!("failed to read request: total_read:{}", total_read);
                     return Err(ProxyError::BadRequest);
                 }
 
                 if total_read == buf.len() {
-                    Self::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
+                    utils::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
                     error!("invalid request, total_read:{}", total_read);
                     return Err(ProxyError::PayloadTooLarge);
                 }
@@ -290,24 +290,36 @@ impl Server {
                         "forward payload to downstream, {} -> {:?}",
                         addr, downstream_addr
                     );
-                    if let Ok(mut downstream) = TcpStream::connect(downstream_addr).await {
-                        Self::write_to_stream(&mut downstream, &buf[..total_read]).await?;
-                        Self::start_stream_transfer(
-                            &mut upstream,
-                            &mut downstream,
-                            &traffic_data_sender,
-                        )
-                        .await
-                        .ok();
 
-                        traffic_data_sender
-                            .send(TrafficData {
-                                tx_bytes: total_read as u64,
-                                rx_bytes: 0,
-                            })
+                    let downstream_type = downstream_type.unwrap();
+                    let downstream = if downstream_type == DownstreamType::HTTP {
+                        TcpStream::connect(downstream_addr)
                             .await
-                            .ok();
-                    }
+                            .map_err(|_| ProxyError::ConnectionRefused)?
+                    } else {
+                        SocksClient::build_socks_connection(
+                            if downstream_type == DownstreamType::SOCKS
+                                || downstream_type == DownstreamType::SOCKSv5
+                            {
+                                SocksVersion::V5
+                            } else {
+                                SocksVersion::V4
+                            },
+                            &downstream_addr,
+                            addr,
+                        )
+                        .await?
+                    };
+
+                    Self::prepare_for_streamming(
+                        http_request,
+                        upstream,
+                        downstream,
+                        traffic_data_sender,
+                        buf,
+                        total_read,
+                    )
+                    .await?;
 
                     return Ok(());
                 }
@@ -340,56 +352,69 @@ impl Server {
             debug!("serve request directly: {}", addr);
 
             for addr in addrs {
-                if let Ok(mut downstream) = TcpStream::connect(addr).await {
-                    let mut payload_start_index: usize = 0;
-                    if http_request.is_connect_request() {
-                        payload_start_index = http_request.header_len;
-                        Self::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
-                    }
-
-                    if payload_start_index < total_read {
-                        let header = str::from_utf8(&buf[payload_start_index..total_read])
-                            .context("failed to convert header as UTF-8 string")
-                            .map_err(|_| ProxyError::BadRequest)?
-                            .replace("Proxy-Connection", "Connection")
-                            .replace("proxy-connection", "Connection");
-
-                        Self::write_to_stream(&mut downstream, header.as_bytes()).await?;
-
-                        if http_request.header_len < total_read {
-                            Self::write_to_stream(
-                                &mut downstream,
-                                &buf[http_request.header_len..total_read],
-                            )
-                            .await?;
-                        }
-                    }
-
-                    Self::start_stream_transfer(
-                        &mut upstream,
-                        &mut downstream,
-                        &traffic_data_sender,
+                if let Ok(downstream) = TcpStream::connect(addr).await {
+                    Self::prepare_for_streamming(
+                        http_request,
+                        upstream,
+                        downstream,
+                        traffic_data_sender,
+                        buf,
+                        total_read,
                     )
                     .await?;
-
-                    traffic_data_sender
-                        .send(TrafficData {
-                            tx_bytes: total_read as u64,
-                            rx_bytes: 0,
-                        })
-                        .await
-                        .ok();
 
                     return Ok(());
                 }
             }
 
-            Self::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
+            utils::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
             return Err(ProxyError::BadGateway(anyhow!(
                 "cannot connect to {}",
                 addr
             )));
         }
+    }
+
+    async fn prepare_for_streamming<'a>(
+        http_request: HttpRequest,
+        mut upstream: TcpStream,
+        mut downstream: TcpStream,
+        traffic_data_sender: Sender<TrafficData>,
+        buf: Block<'a>,
+        total_read: usize,
+    ) -> Result<(), ProxyError> {
+        let mut payload_start_index: usize = 0;
+        if http_request.is_connect_request() {
+            payload_start_index = http_request.header_len;
+            utils::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
+        }
+
+        if payload_start_index < total_read {
+            let header = str::from_utf8(&buf[payload_start_index..total_read])
+                .context("failed to convert header as UTF-8 string")
+                .map_err(|_| ProxyError::BadRequest)?
+                .replace("Proxy-Connection", "Connection")
+                .replace("proxy-connection", "Connection");
+
+            utils::write_to_stream(&mut downstream, header.as_bytes()).await?;
+
+            if http_request.header_len < total_read {
+                utils::write_to_stream(&mut downstream, &buf[http_request.header_len..total_read])
+                    .await?;
+            }
+        }
+
+        traffic_data_sender
+            .send(TrafficData {
+                tx_bytes: total_read as u64,
+                rx_bytes: 0,
+            })
+            .await
+            .ok();
+
+        Self::start_stream_transfer(&mut upstream, &mut downstream, &traffic_data_sender).await?;
+
+        Ok(())
     }
 
     fn matches_proxy_rule(
@@ -410,18 +435,6 @@ impl Server {
         }
 
         result.matched
-    }
-
-    async fn write_to_stream(stream: &mut TcpStream, buf: &[u8]) -> Result<(), ProxyError> {
-        stream
-            .write(buf)
-            .await
-            .context(format!(
-                "failed to write to stream, addr: {:?}",
-                stream.peer_addr()
-            ))
-            .map_err(ProxyError::Disconnected)?;
-        Ok(())
     }
 
     async fn start_stream_transfer(

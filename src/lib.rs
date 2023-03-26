@@ -2,9 +2,12 @@ mod http_parser;
 mod proxy_rule_manager;
 mod server;
 mod server_info_bridge;
+mod socks;
+mod utils;
 
 use anyhow::Result;
 use byte_pool::BytePool;
+use log::error;
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use server::Server;
 use std::fmt::Formatter;
@@ -15,6 +18,18 @@ type BufferPool = Arc<BytePool<Vec<u8>>>;
 
 fn new_buffer_pool() -> BufferPool {
     Arc::new(BytePool::<Vec<u8>>::new())
+}
+
+#[derive(Debug)]
+pub enum ProxyError {
+    ConnectionRefused,
+    IPv6NotSupported,       // not supported by Socks4
+    DomainNameNotSupported, // not supported by Socks4
+    InternalError,
+    BadRequest,
+    PayloadTooLarge,
+    BadGateway(anyhow::Error),
+    Disconnected(anyhow::Error),
 }
 
 #[derive(Default, Debug)]
@@ -29,9 +44,18 @@ impl std::fmt::Display for NetAddr {
     }
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub enum DownstreamType {
+    HTTP,
+    SOCKS, // SOCKSv5
+    SOCKSv5,
+    SOCKSv4,
+}
+
 #[derive(Debug)]
 pub struct Config {
     pub addr: SocketAddr,
+    pub downstream_type: Option<DownstreamType>,
     pub downstream_addr: Option<SocketAddr>,
     pub proxy_rules_file: String,
     pub threads: usize,
@@ -50,6 +74,47 @@ pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
         addr = format!("127.0.0.1:{}", addr);
     }
     addr.parse().ok()
+}
+
+pub fn parse_downstream_addr(addr: &str) -> (Option<DownstreamType>, Option<SocketAddr>) {
+    const SUPPORTED_PROTOCOLS: &[(DownstreamType, &str)] = &[
+        (DownstreamType::HTTP, "http://"),
+        (DownstreamType::SOCKS, "socks://"),
+        (DownstreamType::SOCKSv5, "socksv5://"),
+        (DownstreamType::SOCKSv4, "socksv4://"),
+    ];
+
+    let mut downstream_type = None;
+    SUPPORTED_PROTOCOLS.iter().for_each(|v| {
+        if addr.starts_with(v.1) {
+            downstream_type = Some(v.0.clone());
+        }
+    });
+
+    if downstream_type == None {
+        if addr.find("://").is_some() {
+            error!("invalid downstream protocol, address: {}", addr);
+            return (None, None);
+        }
+        downstream_type = Some(DownstreamType::HTTP);
+    }
+
+    let start_index = addr.find("://").unwrap_or(0);
+    let mut addr = addr[(start_index + 3)..].trim_end_matches("/").to_string();
+
+    let mut start_pos = 0;
+    if let Some(ipv6_end_bracket_pos) = addr.find(']') {
+        start_pos = ipv6_end_bracket_pos + 1;
+    }
+    if addr[start_pos..].find(':').is_none() {
+        addr = format!("127.0.0.1:{}", addr);
+    }
+
+    if let Ok(addr) = addr.parse() {
+        return (downstream_type, Some(addr));
+    }
+
+    (None, None)
 }
 
 #[cfg(target_os = "android")]
