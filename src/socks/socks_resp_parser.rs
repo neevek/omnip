@@ -3,20 +3,7 @@ use std::cmp::min;
 use log::{debug, error};
 use rs_utilities::ByteBuffer;
 
-use super::SocksVersion;
-
-#[derive(PartialEq, Debug)]
-pub(crate) enum SocksError {
-    GeneralError,
-    V5ConnectionNotAllowed,
-    V5NetworkUnreachable,
-    V5HostUnreachable,
-    V5ConnectionRefused,
-    V5TTLExpired,
-    V5CommandNotSupported,
-    V5AddressTypeNotSupported,
-    V5Unassigned,
-}
+use super::{SocksError, SocksVersion};
 
 #[derive(PartialEq, Debug)]
 pub(crate) enum State {
@@ -32,7 +19,6 @@ pub(crate) struct SocksRespParser {
     socks_version: SocksVersion,
     state: State,
     buffer: ByteBuffer<512>,
-    total_bytes: usize,
 }
 
 impl SocksRespParser {
@@ -45,7 +31,6 @@ impl SocksRespParser {
                 State::Connect
             },
             buffer: ByteBuffer::new(),
-            total_bytes: 0,
         }
     }
 
@@ -58,26 +43,23 @@ impl SocksRespParser {
             return false;
         }
 
-        self.total_bytes += buf.len();
         if self.buffer.remaining() < buf.len() || !self.buffer.append(buf) {
             error!("unexpected large buffer: {}", self.buffer.len() + buf.len());
-            self.state = State::ErrorOccurred(SocksError::GeneralError);
-            return false;
+            return self.fail_with_general_error();
         }
 
         if self.state == State::IdentifyMethod {
             self.state = State::IdentifyingMethod;
             if self.buffer.len() != 2 {
                 error!("unexpected socks response length: {}", self.buffer.len());
-                self.state = State::ErrorOccurred(SocksError::GeneralError);
-                return false;
+                return self.fail_with_general_error();
             }
 
-            let bytes = &self.buffer.as_bytes();
+            let bytes = self.buffer.as_bytes();
             if self.socks_version == SocksVersion::V5 {
-                if !bytes.starts_with("\x05\x00".as_bytes()) {
+                if bytes != "\x05\x00".as_bytes() {
                     error!("unexpected socks5 response code: {}", bytes[1]);
-                    return false;
+                    return self.fail_with_general_error();
                 }
                 self.state = State::Connect;
                 self.buffer.clear();
@@ -87,21 +69,19 @@ impl SocksRespParser {
 
         if self.state == State::Connect {
             self.state = State::Connecting;
-            let bytes = &self.buffer.as_bytes();
+            let bytes = self.buffer.as_bytes();
             let resp_size = bytes.len();
 
             // exact 8 bytes for a Socks4 CONNECT response
             if self.socks_version == SocksVersion::V4 {
                 if resp_size != 8 {
-                    self.state = State::ErrorOccurred(SocksError::GeneralError);
                     error!("unexpected socks4 response length: {}", resp_size);
-                    return true;
+                    return self.fail_with_general_error();
                 }
 
                 if !bytes.starts_with("\x00\x5a".as_bytes()) {
                     error!("unexpected socks4 response code: {}", bytes[1]);
-                    self.state = State::ErrorOccurred(SocksError::GeneralError);
-                    return false;
+                    return self.fail_with_general_error();
                 }
 
                 // the DSTPORT and DSTIP fields will be silently ignored
@@ -126,7 +106,7 @@ impl SocksRespParser {
                         _ => State::ErrorOccurred(SocksError::V5Unassigned),
                     };
                     debug!("error response: {:x?}", &bytes[..min(10, resp_size)]);
-                    return false;
+                    return self.fail_with_general_error();
                 }
 
                 // The BND.ADDR field indicates the IP address of the network interface
@@ -173,6 +153,11 @@ impl SocksRespParser {
         }
 
         true
+    }
+
+    fn fail_with_general_error(&mut self) -> bool {
+        self.state = State::ErrorOccurred(SocksError::GeneralError);
+        false
     }
 
     pub fn state(&self) -> &State {

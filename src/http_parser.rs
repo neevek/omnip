@@ -58,10 +58,7 @@ impl HttpRequest {
                 }
             }
 
-            return Some(NetAddr {
-                host: host.to_string(),
-                port: port.unwrap(),
-            });
+            return Some(NetAddr::new(host, port.unwrap()));
         }
 
         debug!("will parse url first: {}", self.url);
@@ -85,10 +82,7 @@ impl HttpRequest {
                     }
                 }
 
-                return Some(NetAddr {
-                    host: host.to_string(),
-                    port,
-                });
+                return Some(NetAddr::new(host, port));
             }
         }
 

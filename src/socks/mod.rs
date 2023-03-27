@@ -1,5 +1,20 @@
 pub(crate) mod socks_client;
+// mod socks_req_parser;
 mod socks_resp_parser;
+// pub(crate) mod socks_server;
+
+#[derive(PartialEq, Debug)]
+pub(crate) enum SocksError {
+    GeneralError,
+    V5ConnectionNotAllowed,
+    V5NetworkUnreachable,
+    V5HostUnreachable,
+    V5ConnectionRefused,
+    V5TTLExpired,
+    V5CommandNotSupported,
+    V5AddressTypeNotSupported,
+    V5Unassigned,
+}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum SocksVersion {

@@ -3,7 +3,7 @@ use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, Tr
 use crate::socks::socks_client::SocksClient;
 use crate::socks::SocksVersion;
 use crate::{
-    http_parser, utils, BufferPool, Config, DownstreamType, NetAddr, ProxyError, ProxyRuleManager,
+    http_parser, utils, BufferPool, Config, DownstreamType, Host, ProxyError, ProxyRuleManager,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use byte_pool::Block;
@@ -35,9 +35,6 @@ const HTTP_RESP_400: &[u8] = b"HTTP/1.1 300 Bad Request\r\nServer: rsp\r\n\r\n";
 const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
 const POST_TRAFFIC_DATA_INTERVAL_SECS: u64 = 10;
 const TRAFFIC_DATA_QUEUE_SIZE: usize = 100;
-
-const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
-    [".home", ".lan", ".corp", ".intranet", ".private"];
 
 #[derive(Clone, Serialize)]
 pub enum ServerState {
@@ -282,9 +279,11 @@ impl Server {
                 .context("failed to parse request")
                 .map_err(|_| ProxyError::BadRequest)?;
 
-            if let Some(downstream_addr) = downstream_addr {
+            if addr.is_domain() && downstream_addr.is_some() {
+                let downstream_addr = downstream_addr.unwrap();
+                let domain = addr.unwrap_domain();
                 if proxy_rule_manager.is_none()
-                    || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), &addr)
+                    || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
                 {
                     debug!(
                         "forward payload to downstream, {} -> {:?}",
@@ -304,7 +303,7 @@ impl Server {
                         } else {
                             SocksVersion::V4
                         };
-                        SocksClient::build_socks_connection(socks_version, &downstream_addr, addr)
+                        SocksClient::initiate_connection(socks_version, &downstream_addr, addr)
                             .await?
                     };
 
@@ -322,29 +321,29 @@ impl Server {
                 }
             }
 
-            let is_internal_domain = INTERNAL_DOMAIN_SURRFIX
-                .iter()
-                .any(|surrfix| addr.host.ends_with(surrfix));
+            let addrs: Vec<SocketAddr> = if let Host::Domain(domain) = &addr.host {
+                let resolver = if addr.is_internal_domain() {
+                    system_resolver
+                } else {
+                    resolver
+                };
 
-            let resolver = if is_internal_domain {
-                system_resolver
-            } else {
                 resolver
+                    .lookup(domain.as_str())
+                    .await
+                    .map_err(|e| {
+                        ProxyError::BadGateway(anyhow!("failed to resolve: {}, error: {}", addr, e))
+                    })?
+                    .iter()
+                    .map(|&e| SocketAddr::new(e, addr.port))
+                    .collect()
+            } else {
+                if let Host::IP(ip) = addr.host {
+                    vec![SocketAddr::new(ip, addr.port)]
+                } else {
+                    vec![]
+                }
             };
-
-            let addrs: Vec<SocketAddr> = resolver
-                .lookup(&addr.host)
-                .await
-                .map_err(|e| {
-                    ProxyError::BadGateway(anyhow!(
-                        "failed to resolve: {}, error: {}",
-                        addr.host,
-                        e
-                    ))
-                })?
-                .iter()
-                .map(|&e| SocketAddr::new(e, addr.port))
-                .collect();
 
             debug!("serve request directly: {}", addr);
 
@@ -416,13 +415,10 @@ impl Server {
 
     fn matches_proxy_rule(
         mut proxy_rule_manager: Arc<RwLock<ProxyRuleManager>>,
-        addr: &NetAddr,
+        domain: &str,
+        port: u16,
     ) -> bool {
-        let result = proxy_rule_manager
-            .read()
-            .unwrap()
-            .matches(addr.host.as_str(), addr.port);
-
+        let result = proxy_rule_manager.read().unwrap().matches(domain, port);
         if result.needs_sort_rules {
             proxy_rule_manager
                 .borrow_mut()

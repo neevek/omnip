@@ -4,7 +4,7 @@ use rs_utilities::ByteBuffer;
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::TcpStream;
 
-use crate::{utils, NetAddr, ProxyError};
+use crate::{utils, Host, NetAddr, ProxyError};
 
 use super::{
     socks_resp_parser::{self, SocksRespParser},
@@ -14,7 +14,7 @@ use super::{
 pub struct SocksClient {}
 
 impl SocksClient {
-    pub async fn build_socks_connection(
+    pub async fn initiate_connection(
         socks_version: SocksVersion,
         socks_server_addr: &SocketAddr,
         dst_addr: NetAddr,
@@ -24,7 +24,6 @@ impl SocksClient {
             ProxyError::ConnectionRefused
         })?;
 
-        let ip = dst_addr.host.parse::<IpAddr>();
         let mut resp_parser = SocksRespParser::new(socks_version);
         let mut buf = [0u8; 512];
         loop {
@@ -37,8 +36,8 @@ impl SocksClient {
                     let mut connect_command = ByteBuffer::<512>::new();
                     if *resp_parser.socks_version() == SocksVersion::V5 {
                         connect_command.append("\x05\x01\x00".as_ref());
-                        if let Ok(ip) = ip {
-                            match ip {
+                        match dst_addr.host {
+                            Host::IP(ip) => match ip {
                                 IpAddr::V4(ipv4) => {
                                     connect_command.append_byte('\x01' as u8);
                                     connect_command.append(&ipv4.octets());
@@ -49,18 +48,19 @@ impl SocksClient {
                                     connect_command.append(&ipv6.octets());
                                     connect_command.append(&dst_addr.port.to_be_bytes());
                                 }
+                            },
+                            Host::Domain(ref domain) => {
+                                // domain name
+                                let domain_name = domain.as_bytes();
+                                connect_command.append_byte('\x03' as u8);
+                                connect_command.append_byte(domain_name.len() as u8);
+                                connect_command.append(domain_name);
+                                connect_command.append(&dst_addr.port.to_be_bytes());
                             }
-                        } else {
-                            // domain name
-                            let domain_name = dst_addr.host.as_bytes();
-                            connect_command.append_byte('\x03' as u8);
-                            connect_command.append_byte(domain_name.len() as u8);
-                            connect_command.append(domain_name);
-                            connect_command.append(&dst_addr.port.to_be_bytes());
                         }
                     } else {
                         connect_command.append("\x04\x01".as_ref());
-                        if let Ok(ip) = ip {
+                        if let Host::IP(ip) = dst_addr.host {
                             match ip {
                                 IpAddr::V4(ipv4) => {
                                     connect_command.append(&dst_addr.port.to_be_bytes());

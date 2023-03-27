@@ -11,8 +11,11 @@ use log::error;
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use server::Server;
 use std::fmt::Formatter;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+
+const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
+    [".home", ".lan", ".corp", ".intranet", ".private"];
 
 type BufferPool = Arc<BytePool<Vec<u8>>>;
 
@@ -32,15 +35,59 @@ pub enum ProxyError {
     Disconnected(anyhow::Error),
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
+pub enum Host {
+    IP(IpAddr),
+    Domain(String),
+}
+
+#[derive(Debug)]
 pub struct NetAddr {
-    pub host: String, // domain or ip
+    pub host: Host,
     pub port: u16,
+}
+
+impl NetAddr {
+    pub fn new(host: &str, port: u16) -> Self {
+        NetAddr {
+            host: match host.parse::<IpAddr>() {
+                Ok(ip) => Host::IP(ip),
+                _ => Host::Domain(host.to_string()),
+            },
+            port,
+        }
+    }
+
+    pub fn is_domain(&self) -> bool {
+        if let Host::Domain(_) = self.host {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn unwrap_domain(&self) -> &str {
+        if let Host::Domain(ref domain) = self.host {
+            domain.as_str()
+        } else {
+            panic!("not a domain")
+        }
+    }
+
+    pub fn is_internal_domain(&self) -> bool {
+        if let Host::Domain(ref domain) = self.host {
+            INTERNAL_DOMAIN_SURRFIX
+                .iter()
+                .any(|suffix| domain.ends_with(suffix))
+        } else {
+            false
+        }
+    }
 }
 
 impl std::fmt::Display for NetAddr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        formatter.write_fmt(format_args!("{}:{}", self.host, self.port))
+        formatter.write_fmt(format_args!("{:?}:{}", self.host, self.port))
     }
 }
 
