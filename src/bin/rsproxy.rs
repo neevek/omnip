@@ -44,10 +44,10 @@ fn main() {
 #[clap(author, version, about, long_about = None)]
 struct RsproxyArgs {
     /// Address ([ip:]port pair) to listen on
-    #[clap(short = 'l', long, required = true, display_order = 1)]
+    #[clap(short = 'a', long, required = true, display_order = 1)]
     addr: String,
 
-    /// [ip:]port, downstream which the proxy server will relay traffic to based on proxy rules
+    /// downstream which the proxy server will relay traffic to based on proxy rules, http://ip:port | socks5://ip:port | socks4://ip:port
     #[clap(short = 'd', long, default_value = "", display_order = 2)]
     downstream: String,
 

@@ -297,18 +297,15 @@ impl Server {
                             .await
                             .map_err(|_| ProxyError::ConnectionRefused)?
                     } else {
-                        SocksClient::build_socks_connection(
-                            if downstream_type == DownstreamType::SOCKS
-                                || downstream_type == DownstreamType::SOCKSv5
-                            {
-                                SocksVersion::V5
-                            } else {
-                                SocksVersion::V4
-                            },
-                            &downstream_addr,
-                            addr,
-                        )
-                        .await?
+                        let socks_version = if downstream_type == DownstreamType::SOCKS
+                            || downstream_type == DownstreamType::SOCKS5
+                        {
+                            SocksVersion::V5
+                        } else {
+                            SocksVersion::V4
+                        };
+                        SocksClient::build_socks_connection(socks_version, &downstream_addr, addr)
+                            .await?
                     };
 
                     Self::prepare_for_streamming(

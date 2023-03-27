@@ -1,4 +1,6 @@
-use log::{error, warn};
+use std::cmp::min;
+
+use log::{debug, error};
 use rs_utilities::ByteBuffer;
 
 use super::SocksVersion;
@@ -58,22 +60,23 @@ impl SocksRespParser {
 
         self.total_bytes += buf.len();
         if self.buffer.remaining() < buf.len() || !self.buffer.append(buf) {
-            error!("response too large: {}", self.buffer.len() + buf.len());
+            error!("unexpected large buffer: {}", self.buffer.len() + buf.len());
             self.state = State::ErrorOccurred(SocksError::GeneralError);
             return false;
         }
 
         if self.state == State::IdentifyMethod {
             self.state = State::IdentifyingMethod;
-            if self.buffer.len() < 2 {
-                // wait for more bytes to come
-                return true;
+            if self.buffer.len() != 2 {
+                error!("unexpected socks response length: {}", self.buffer.len());
+                self.state = State::ErrorOccurred(SocksError::GeneralError);
+                return false;
             }
 
             let bytes = &self.buffer.as_bytes();
             if self.socks_version == SocksVersion::V5 {
                 if !bytes.starts_with("\x05\x00".as_bytes()) {
-                    self.state = State::ErrorOccurred(SocksError::GeneralError);
+                    error!("unexpected socks5 response code: {}", bytes[1]);
                     return false;
                 }
                 self.state = State::Connect;
@@ -89,18 +92,16 @@ impl SocksRespParser {
 
             // exact 8 bytes for a Socks4 CONNECT response
             if self.socks_version == SocksVersion::V4 {
-                if resp_size < 8 {
-                    // wait for more bytes to come
+                if resp_size != 8 {
+                    self.state = State::ErrorOccurred(SocksError::GeneralError);
+                    error!("unexpected socks4 response length: {}", resp_size);
                     return true;
                 }
 
                 if !bytes.starts_with("\x00\x5a".as_bytes()) {
+                    error!("unexpected socks4 response code: {}", bytes[1]);
                     self.state = State::ErrorOccurred(SocksError::GeneralError);
                     return false;
-                }
-
-                if resp_size > 8 {
-                    warn!("Socks4 CONNECT response is not exact 8 bytes!");
                 }
 
                 // the DSTPORT and DSTIP fields will be silently ignored
@@ -124,6 +125,7 @@ impl SocksRespParser {
                         8u8 => State::ErrorOccurred(SocksError::V5AddressTypeNotSupported),
                         _ => State::ErrorOccurred(SocksError::V5Unassigned),
                     };
+                    debug!("error response: {:x?}", &bytes[..min(10, resp_size)]);
                     return false;
                 }
 
@@ -143,32 +145,30 @@ impl SocksRespParser {
                 let completed = match bytes[3] {
                     1u8 => {
                         // <4-byte header> + <4-byte IP> + <2-byte port>
-                        resp_size >= 4 + 4 + 2
+                        resp_size == 4 + 4 + 2
                     }
                     3u8 => {
                         // domain name
                         let domain_name_len = bytes[4];
                         // <4-byte header> + <1-byte domain length> + <N-byte domain> + <2-byte port>
-                        resp_size >= (4 + 1 + domain_name_len + 2) as usize
+                        resp_size == (4 + 1 + domain_name_len + 2) as usize
                     }
                     4u8 => {
                         // ipv6
                         // <4-byte header> + <16-byte IP> + <2-byte port>
-                        resp_size >= 4 + 16 + 2
+                        resp_size == 4 + 16 + 2
                     }
-                    _ => {
-                        self.state = State::ErrorOccurred(SocksError::GeneralError);
-                        return false;
-                    }
+                    _ => false,
                 };
 
                 if completed {
                     self.state = State::NegotiationCompleted;
                 } else {
-                    // wait for more input
+                    error!("unexpected socks5 response");
+                    self.state = State::ErrorOccurred(SocksError::GeneralError);
                 }
 
-                return true;
+                return completed;
             }
         }
 

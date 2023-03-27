@@ -47,9 +47,9 @@ impl std::fmt::Display for NetAddr {
 #[derive(PartialEq, Debug, Clone)]
 pub enum DownstreamType {
     HTTP,
-    SOCKS, // SOCKSv5
-    SOCKSv5,
-    SOCKSv4,
+    SOCKS, // SOCKS5
+    SOCKS5,
+    SOCKS4,
 }
 
 #[derive(Debug)]
@@ -80,8 +80,8 @@ pub fn parse_downstream_addr(addr: &str) -> (Option<DownstreamType>, Option<Sock
     const SUPPORTED_PROTOCOLS: &[(DownstreamType, &str)] = &[
         (DownstreamType::HTTP, "http://"),
         (DownstreamType::SOCKS, "socks://"),
-        (DownstreamType::SOCKSv5, "socksv5://"),
-        (DownstreamType::SOCKSv4, "socksv4://"),
+        (DownstreamType::SOCKS5, "socks5://"),
+        (DownstreamType::SOCKS4, "socks4://"),
     ];
 
     let mut downstream_type = None;
