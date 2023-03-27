@@ -71,6 +71,6 @@ struct RsproxyArgs {
     #[clap(short = 'w', long, action, display_order = 7)]
     watch_proxy_rules_change: bool,
 
-    #[clap(short = 'L', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 8)]
+    #[clap(short = 'l', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 8)]
     loglevel: String,
 }

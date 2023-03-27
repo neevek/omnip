@@ -883,6 +883,8 @@ dependencies = [
 [[package]]
 name = "rs-utilities"
 version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5448ca1a302173b26aa29804e12074e1f88de38d663cf3970f50a04f8cf49fe"
 dependencies = [
  "android_logger 0.11.1",
  "anyhow",
@@ -898,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "rsproxy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "android_logger 0.10.1",
  "anyhow",

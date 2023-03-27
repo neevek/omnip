@@ -1,36 +1,35 @@
 rsproxy
 =======
 
-An HTTP proxy written in Rust.
-
+HTTP and SOCKS proxy written in Rust.
 
 Features
 --------
 
-1. Basic [HTTP tunneling](https://en.wikipedia.org/wiki/HTTP_tunnel).
-2. Proxy chaining with the `--downstream` option. e.g. `--downstream PORT` to forward connections to the specified PORT.
-3. Simple proxy rules support, traffic will be relayed to downstream if the requested domain matches one of the proxy rules, for example:
+1. Supports [HTTP tunneling](https://en.wikipedia.org/wiki/HTTP_tunnel) and `CONNECT` command of SOCKS5/SOCKS4 proxy. 
+2. Proxy chaining with the `--downstream` option. e.g. `--downstream http://ip:port` or `--downstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
+3. Supports simple proxy rules, traffic will be relayed to downstream if the requested domain matches one of the proxy rules, for example:
     * example.com
     * .example.com
     * ||example.com
     * ...
 4. DoT (DNS-over-TLS) or custom name servers are supported.
-5. JNI interface provided for Androd (Java/Kotlin), simply declare the required native methods in Java/Kotlin (see [lib.rs](https://github.com/neevek/rsproxy/blob/master/src/lib.rs)) and call it.
+5. JNI interface provided for Androd (Java/Kotlin), see [lib.rs](https://github.com/neevek/rsproxy/blob/master/src/lib.rs).
 
 
 ```
-rsproxy 0.1.11
+rsproxy 0.2.0
 
 USAGE:
     rsproxy [OPTIONS] --addr <ADDR>
 
 OPTIONS:
-    -l, --addr <ADDR>
+    -a, --addr <ADDR>
             Address ([ip:]port pair) to listen on
 
     -d, --downstream <DOWNSTREAM>
-            [ip:]port, downstream which the proxy server will relay traffic to based on proxy rules
-            [default: ]
+            downstream which the proxy server will relay traffic to based on proxy rules,
+            http://ip:port | socks5://ip:port | socks4://ip:port [default: ]
 
     -r, --proxy-rules-file <PROXY_RULES_FILE>
             Path to the proxy rules file [default: ]
@@ -48,7 +47,7 @@ OPTIONS:
     -w, --watch-proxy-rules-change
             reload proxy rules if updated
 
-    -L, --loglevel <LOGLEVEL>
+    -l, --loglevel <LOGLEVEL>
             [default: I] [possible values: T, D, I, W, E]
 
     -h, --help
