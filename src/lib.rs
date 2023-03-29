@@ -146,8 +146,8 @@ pub fn parse_downstream_addr(addr: &str) -> (Option<DownstreamType>, Option<Sock
         downstream_type = Some(DownstreamType::HTTP);
     }
 
-    let start_index = addr.find("://").unwrap_or(0);
-    let mut addr = addr[(start_index + 3)..].trim_end_matches("/").to_string();
+    let start_index = addr.find("://").map_or_else(|| 0, |index| index + 2);
+    let mut addr = addr[start_index..].trim_end_matches("/").to_string();
 
     let mut start_pos = 0;
     if let Some(ipv6_end_bracket_pos) = addr.find(']') {
