@@ -1,7 +1,7 @@
 pub(crate) mod socks_client;
-// mod socks_req_parser;
+mod socks_req_parser;
 mod socks_resp_parser;
-// pub(crate) mod socks_server;
+pub(crate) mod socks_server;
 
 #[derive(PartialEq, Debug)]
 pub(crate) enum SocksError {

@@ -58,6 +58,13 @@ impl NetAddr {
         }
     }
 
+    pub fn new_with_ip(ip: IpAddr, port: u16) -> Self {
+        NetAddr {
+            host: Host::IP(ip),
+            port,
+        }
+    }
+
     pub fn is_domain(&self) -> bool {
         if let Host::Domain(_) = self.host {
             true

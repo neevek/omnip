@@ -119,7 +119,7 @@ impl SocksRespParser {
                 // destination host. This information may be useful for troubleshooting
                 // or network analysis purposes.
                 //
-                // So we will simply drain and ignore the rest of this the Socks5 response
+                // So we will simply drain and ignore the rest of the Socks5 response
                 // so that we have a clean connection for later streaming
 
                 let completed = match bytes[3] {
