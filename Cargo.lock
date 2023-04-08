@@ -105,8 +105,7 @@ checksum = "c1ad822118d20d2c234f427000d5acc36eabe1e29a348c89b63dd60b13f28e5d"
 [[package]]
 name = "byte-pool"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c7230ddbb427b1094d477d821a99f3f54d36333178eeb806e279bcdcecf0ca"
+source = "git+https://github.com/neevek/byte-pool#080e0c74f398b7ba2022337d2885e184b81a1df9"
 dependencies = [
  "crossbeam-queue",
  "stable_deref_trait",
@@ -684,9 +683,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.14.0"
+version = "1.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f7254b99e31cad77da24b08ebf628882739a608578bb1bcdfc1f9c21260d7c0"
+checksum = "b7e5500299e16ebb147ae15a00a942af264cf3688f47923b8fc2cd5858f23ad3"
 
 [[package]]
 name = "os_str_bytes"
@@ -882,9 +881,9 @@ dependencies = [
 
 [[package]]
 name = "rs-utilities"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5448ca1a302173b26aa29804e12074e1f88de38d663cf3970f50a04f8cf49fe"
+checksum = "c5b75e86f691f63827c3de486f91858efc4f68330d13e6a2d8bded7d3d1519d2"
 dependencies = [
  "android_logger 0.11.1",
  "anyhow",
@@ -904,11 +903,13 @@ version = "0.2.1"
 dependencies = [
  "android_logger 0.10.1",
  "anyhow",
+ "async-trait",
  "byte-pool",
  "chrono",
  "clap",
  "futures-util",
  "jni",
+ "lazy_static",
  "log",
  "notify",
  "num_cpus",

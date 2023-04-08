@@ -25,10 +25,9 @@ impl SocksRespParser {
     pub fn new(socks_version: SocksVersion) -> Self {
         SocksRespParser {
             socks_version: socks_version.clone(),
-            state: if socks_version == SocksVersion::V5 {
-                State::IdentifyMethod
-            } else {
-                State::Connect
+            state: match socks_version {
+                SocksVersion::V5 => State::IdentifyMethod,
+                SocksVersion::V4 => State::Connect,
             },
             buffer: ByteBuffer::new(),
         }

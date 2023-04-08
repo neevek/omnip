@@ -9,20 +9,21 @@ fn main() {
 
     rs_utilities::LogHelper::init_logger("rsp", &args.loglevel);
 
-    let addr = parse_sock_addr(&args.addr);
-    if addr.is_none() {
-        error!("invalid address: {}", &args.addr);
+    let (server_type, server_addr) = parse_server_addr(args.addr.as_str());
+    if !args.addr.is_empty() && server_type.is_none() {
+        error!("invalid server address: {}", args.addr);
         return;
     }
 
-    let (downstream_type, downstream_addr) = parse_downstream_addr(args.downstream.as_str());
+    let (downstream_type, downstream_addr) = parse_server_addr(args.downstream.as_str());
     if !args.downstream.is_empty() && downstream_type.is_none() {
         error!("invalid downstream address: {}", args.downstream);
         return;
     }
 
     let config = Config {
-        addr: addr.unwrap(),
+        server_type: server_type.unwrap(),
+        addr: server_addr.unwrap(),
         downstream_type,
         downstream_addr,
         proxy_rules_file: args.proxy_rules_file,
@@ -43,7 +44,7 @@ fn main() {
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct RsproxyArgs {
-    /// Address ([ip:]port pair) to listen on
+    /// Server address [<http|socks|socks5|socks4>://][ip:]port, for example: http://127.0.0.1:8000
     #[clap(short = 'a', long, required = true, display_order = 1)]
     addr: String,
 

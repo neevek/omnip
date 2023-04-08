@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, Result};
 use tokio::{io::AsyncReadExt, io::AsyncWriteExt, net::TcpStream};
 
 use crate::ProxyError;

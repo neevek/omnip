@@ -1,4 +1,5 @@
-mod http_parser;
+mod http;
+mod proxy_handler;
 mod proxy_rule_manager;
 mod server;
 mod server_info_bridge;
@@ -6,28 +7,27 @@ mod socks;
 mod utils;
 
 use anyhow::Result;
-use byte_pool::BytePool;
+use byte_pool::{Block, BytePool};
+use lazy_static::lazy_static;
 use log::error;
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use server::Server;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 
 const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
     [".home", ".lan", ".corp", ".intranet", ".private"];
 
-type BufferPool = Arc<BytePool<Vec<u8>>>;
-
-fn new_buffer_pool() -> BufferPool {
-    Arc::new(BytePool::<Vec<u8>>::new())
+lazy_static! {
+    static ref BUFFER_POOL: BytePool::<Vec<u8>> = BytePool::<Vec<u8>>::new();
 }
+
+type PooledBuffer<'a> = Block<'a>;
 
 #[derive(Debug)]
 pub enum ProxyError {
     ConnectionRefused,
-    IPv6NotSupported,       // not supported by Socks4
-    DomainNameNotSupported, // not supported by Socks4
+    IPv6NotSupported, // not supported by Socks4
     InternalError,
     BadRequest,
     PayloadTooLarge,
@@ -35,13 +35,22 @@ pub enum ProxyError {
     Disconnected(anyhow::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Host {
     IP(IpAddr),
     Domain(String),
 }
 
-#[derive(Debug)]
+impl Display for Host {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Host::IP(ip) => formatter.write_fmt(format_args!("{}", ip)),
+            Host::Domain(domain) => formatter.write_fmt(format_args!("{}", domain)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NetAddr {
     pub host: Host,
     pub port: u16,
@@ -54,6 +63,13 @@ impl NetAddr {
                 Ok(ip) => Host::IP(ip),
                 _ => Host::Domain(host.to_string()),
             },
+            port,
+        }
+    }
+
+    pub fn new_width_domain(domain: String, port: u16) -> Self {
+        NetAddr {
+            host: Host::Domain(domain),
             port,
         }
     }
@@ -94,22 +110,22 @@ impl NetAddr {
 
 impl std::fmt::Display for NetAddr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        formatter.write_fmt(format_args!("{:?}:{}", self.host, self.port))
+        formatter.write_fmt(format_args!("{}:{}", self.host, self.port))
     }
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub enum DownstreamType {
+pub enum ServerType {
     HTTP,
-    SOCKS, // SOCKS5
     SOCKS5,
     SOCKS4,
 }
 
 #[derive(Debug)]
 pub struct Config {
+    pub server_type: ServerType,
     pub addr: SocketAddr,
-    pub downstream_type: Option<DownstreamType>,
+    pub downstream_type: Option<ServerType>,
     pub downstream_addr: Option<SocketAddr>,
     pub proxy_rules_file: String,
     pub threads: usize,
@@ -118,7 +134,7 @@ pub struct Config {
     pub watch_proxy_rules_change: bool,
 }
 
-pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
+pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {
     let mut addr = addr.to_string();
     let mut start_pos = 0;
     if let Some(ipv6_end_bracket_pos) = addr.find(']') {
@@ -130,12 +146,11 @@ pub fn parse_sock_addr(addr: &str) -> Option<SocketAddr> {
     addr.parse().ok()
 }
 
-pub fn parse_downstream_addr(addr: &str) -> (Option<DownstreamType>, Option<SocketAddr>) {
-    const SUPPORTED_PROTOCOLS: &[(DownstreamType, &str)] = &[
-        (DownstreamType::HTTP, "http://"),
-        (DownstreamType::SOCKS, "socks://"),
-        (DownstreamType::SOCKS5, "socks5://"),
-        (DownstreamType::SOCKS4, "socks4://"),
+pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<SocketAddr>) {
+    const SUPPORTED_PROTOCOLS: &[(ServerType, &str)] = &[
+        (ServerType::HTTP, "http://"),
+        (ServerType::SOCKS5, "socks5://"),
+        (ServerType::SOCKS4, "socks4://"),
     ];
 
     let mut downstream_type = None;
@@ -150,10 +165,11 @@ pub fn parse_downstream_addr(addr: &str) -> (Option<DownstreamType>, Option<Sock
             error!("invalid downstream protocol, address: {}", addr);
             return (None, None);
         }
-        downstream_type = Some(DownstreamType::HTTP);
+        // default to HTTP
+        downstream_type = Some(ServerType::HTTP);
     }
 
-    let start_index = addr.find("://").map_or_else(|| 0, |index| index + 2);
+    let start_index = addr.find("://").map_or_else(|| 0, |index| index + 3);
     let mut addr = addr[start_index..].trim_end_matches("/").to_string();
 
     let mut start_pos = 0;
@@ -221,7 +237,7 @@ pub mod android {
         }
 
         let str_addr: String = env.get_string(jaddr).unwrap().into();
-        let addr = parse_sock_addr(&str_addr);
+        let addr = parse_socket_addr(&str_addr);
         if addr.is_none() {
             error!("invalid address: {}", &str_addr);
             return 0;
@@ -250,7 +266,7 @@ pub mod android {
 
         let config = Config {
             addr: addr.unwrap(),
-            downstream_addr: parse_sock_addr(downstream.as_str()),
+            downstream_addr: parse_socket_addr(downstream.as_str()),
             proxy_rules_file,
             threads: jthreads as usize,
             dot_server: dotServer,

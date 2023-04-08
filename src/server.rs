@@ -1,12 +1,10 @@
-use crate::http_parser::HttpRequest;
+use crate::http::http_proxy_handler::HttpProxyHandler;
+use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
 use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, TrafficData};
-use crate::socks::socks_client::SocksClient;
+use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
-use crate::{
-    http_parser, utils, BufferPool, Config, DownstreamType, Host, ProxyError, ProxyRuleManager,
-};
+use crate::{utils, Config, Host, ProxyError, ProxyRuleManager, ServerType};
 use anyhow::{anyhow, bail, Context, Result};
-use byte_pool::Block;
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
 use notify::event::ModifyKind;
@@ -15,9 +13,8 @@ use rs_utilities::dns::{DNSResolver, DNSResolverType};
 use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
-use std::cmp::min;
 use std::fmt::Display;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str;
 use std::sync::{Arc, RwLock};
@@ -28,11 +25,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_400: &[u8] = b"HTTP/1.1 300 Bad Request\r\nServer: rsp\r\n\r\n";
-const MAX_CLIENT_HEADER_SIZE: usize = 1024 * 8;
 const POST_TRAFFIC_DATA_INTERVAL_SECS: u64 = 10;
 const TRAFFIC_DATA_QUEUE_SIZE: usize = 100;
 
@@ -60,7 +52,6 @@ impl Display for ServerState {
 pub struct Server {
     config: Config,
     tcp_listener: Option<TcpListener>,
-    buffer_pool: BufferPool,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     resolver: Option<Arc<DNSResolver>>,
     system_resolver: Option<Arc<DNSResolver>>,
@@ -76,7 +67,6 @@ impl Server {
         Server {
             config,
             tcp_listener: None,
-            buffer_pool: crate::new_buffer_pool(),
             proxy_rule_manager: None,
             resolver: None,
             system_resolver: None,
@@ -96,7 +86,7 @@ impl Server {
         self.setup_proxy_rules_manager()?;
 
         if let Some(addr) = self.config.downstream_addr {
-            info!("using downstream: {}", addr);
+            info!("using outbound_stream: {}", addr);
         }
 
         let worker_threads = if self.config.threads > 0 {
@@ -184,20 +174,21 @@ impl Server {
         let listener = self.tcp_listener.as_ref().unwrap();
         loop {
             match listener.accept().await {
-                Ok((upstream, _addr)) => {
+                Ok((inbound_stream, _addr)) => {
                     let resolver = self.resolver.as_ref().unwrap().clone();
                     let system_resolver = self.system_resolver.as_ref().unwrap().clone();
-                    let buffer_pool = self.buffer_pool.clone();
                     let downstream_type = self.config.downstream_type.clone();
                     let downstream_addr = self.config.downstream_addr.clone();
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
                     let traffic_data_sender = traffic_data_sender.clone();
+                    let handler = self.create_proxy_handler();
+
                     tokio::spawn(async move {
                         Self::process_stream(
                             resolver,
                             system_resolver,
-                            buffer_pool,
-                            upstream,
+                            handler,
+                            inbound_stream,
                             downstream_type,
                             downstream_addr,
                             proxy_rule_manager,
@@ -221,6 +212,18 @@ impl Server {
         }
     }
 
+    fn create_proxy_handler(&self) -> Box<dyn ProxyHandler + Send + Sync> {
+        match self.config.server_type {
+            ServerType::HTTP => Box::new(HttpProxyHandler::new()),
+            ServerType::SOCKS5 => {
+                Box::new(SocksProxyHandler::new(SocksVersion::V5, self.config.addr))
+            }
+            ServerType::SOCKS4 => {
+                Box::new(SocksProxyHandler::new(SocksVersion::V4, self.config.addr))
+            }
+        }
+    }
+
     pub fn has_scheduled_start(&self) -> bool {
         self.scheduled_start
     }
@@ -232,185 +235,143 @@ impl Server {
     async fn process_stream(
         resolver: Arc<DNSResolver>,
         system_resolver: Arc<DNSResolver>,
-        buffer_pool: BufferPool,
-        mut upstream: TcpStream,
-        downstream_type: Option<DownstreamType>,
+        mut proxy_handler: Box<dyn ProxyHandler + Send + Sync>,
+        mut inbound_stream: TcpStream,
+        downstream_type: Option<ServerType>,
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
         traffic_data_sender: Sender<TrafficData>,
     ) -> Result<(), ProxyError> {
-        let mut buf = buffer_pool.alloc(MAX_CLIENT_HEADER_SIZE);
+        // this buffer must be big enough to receive SOCKS request
+        let mut buffer = [0u8; 512];
         let mut total_read = 0;
         loop {
-            let nread = upstream
-                .read(&mut buf[total_read..])
+            let nread = inbound_stream
+                .read(&mut buffer)
                 .await
-                .context("failed to read from upstream")
+                .context("failed to read from inbound_stream")
                 .map_err(|_| ProxyError::BadRequest)?;
 
             total_read += nread;
 
-            let http_request = http_parser::parse(&buf[..total_read]);
-            if http_request.is_none() {
-                if nread == 0 {
-                    utils::write_to_stream(&mut upstream, HTTP_RESP_400).await?;
-                    error!("failed to read request: total_read:{}", total_read);
-                    return Err(ProxyError::BadRequest);
+            let addr = match proxy_handler.parse(&buffer[..nread]) {
+                ParseState::Pending => {
+                    continue;
                 }
-
-                if total_read == buf.len() {
-                    utils::write_to_stream(&mut upstream, HTTP_RESP_413).await?;
-                    error!("invalid request, total_read:{}", total_read);
-                    return Err(ProxyError::PayloadTooLarge);
+                ParseState::ContinueWithReply(reply) => {
+                    utils::write_to_stream(&mut inbound_stream, reply.as_ref()).await?;
+                    continue;
                 }
-
-                if buf[..min(16, total_read)].iter().any(|w| w >= &0x80) {
-                    error!("invalid request, total_read:{}", total_read);
-                    return Err(ProxyError::BadRequest);
+                ParseState::FailWithReply((reply, err)) => {
+                    utils::write_to_stream(&mut inbound_stream, reply.as_ref()).await?;
+                    return Err(err);
                 }
+                ParseState::ReceivedRequest(result) => result,
+            };
 
-                // read more
-                continue;
-            }
-
-            let http_request = http_request.unwrap();
-            let addr = http_request
-                .get_request_addr()
-                .context("failed to parse request")
-                .map_err(|_| ProxyError::BadRequest)?;
+            let mut outbound_type = OutboundType::Direct;
+            let mut outbound_stream = None;
 
             if addr.is_domain() && downstream_addr.is_some() {
-                let downstream_addr = downstream_addr.unwrap();
                 let domain = addr.unwrap_domain();
                 if proxy_rule_manager.is_none()
                     || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
                 {
-                    debug!(
-                        "forward payload to downstream, {} -> {:?}",
-                        addr, downstream_addr
-                    );
-
-                    let downstream_type = downstream_type.unwrap();
-                    let downstream = if downstream_type == DownstreamType::HTTP {
-                        TcpStream::connect(downstream_addr)
-                            .await
-                            .map_err(|_| ProxyError::ConnectionRefused)?
-                    } else {
-                        let socks_version = if downstream_type == DownstreamType::SOCKS
-                            || downstream_type == DownstreamType::SOCKS5
-                        {
-                            SocksVersion::V5
-                        } else {
-                            SocksVersion::V4
-                        };
-                        SocksClient::initiate_connection(socks_version, &downstream_addr, addr)
-                            .await?
+                    outbound_type = match downstream_type.unwrap() {
+                        ServerType::HTTP => OutboundType::HttpProxy,
+                        ServerType::SOCKS4 => OutboundType::SocksProxy(SocksVersion::V4),
+                        ServerType::SOCKS5 => OutboundType::SocksProxy(SocksVersion::V5),
                     };
 
-                    Self::prepare_for_streamming(
-                        http_request,
-                        upstream,
-                        downstream,
-                        traffic_data_sender,
-                        buf,
-                        total_read,
-                    )
-                    .await?;
+                    debug!(
+                        "forward payload to next proxy({:?}), {} -> {:?}",
+                        outbound_type, addr, downstream_addr
+                    );
 
-                    return Ok(());
+                    outbound_stream = match TcpStream::connect(downstream_addr.unwrap()).await {
+                        Ok(stream) => Some(stream),
+                        Err(e) => {
+                            error!(
+                                "failed to connect to downstream: {}, err:{}",
+                                downstream_addr.unwrap(),
+                                e
+                            );
+                            None
+                        }
+                    }
                 }
             }
 
-            let addrs: Vec<SocketAddr> = if let Host::Domain(domain) = &addr.host {
-                let resolver = if addr.is_internal_domain() {
-                    system_resolver
-                } else {
-                    resolver
+            if outbound_type == OutboundType::Direct {
+                debug!("serve request directly: {}", addr);
+                outbound_stream = match &addr.host {
+                    Host::Domain(domain) => {
+                        let resolver = if addr.is_internal_domain() {
+                            &system_resolver
+                        } else {
+                            &resolver
+                        };
+
+                        let ip_arr = resolver.lookup(domain.as_str()).await.map_err(|e| {
+                            ProxyError::BadGateway(anyhow!(
+                                "failed to resolve: {}, error: {}",
+                                addr,
+                                e
+                            ))
+                        })?;
+
+                        let mut outbound_stream = None;
+                        for ip in ip_arr {
+                            if !ip.is_unspecified() {
+                                let stream = Self::create_tcp_stream(ip, addr.port).await;
+                                if stream.is_some() {
+                                    outbound_stream = stream;
+                                    break;
+                                }
+                            }
+                        }
+
+                        outbound_stream
+                    }
+
+                    Host::IP(ip) => Self::create_tcp_stream(*ip, addr.port).await,
                 };
+            }
 
-                resolver
-                    .lookup(domain.as_str())
-                    .await
-                    .map_err(|e| {
-                        ProxyError::BadGateway(anyhow!("failed to resolve: {}, error: {}", addr, e))
-                    })?
-                    .iter()
-                    .map(|&e| SocketAddr::new(e, addr.port))
-                    .collect()
-            } else {
-                if let Host::IP(ip) = addr.host {
-                    vec![SocketAddr::new(ip, addr.port)]
-                } else {
-                    vec![]
-                }
-            };
+            match outbound_stream {
+                Some(ref mut outbound_stream) => {
+                    proxy_handler
+                        .handle(outbound_type, outbound_stream, &mut inbound_stream)
+                        .await?;
 
-            debug!("serve request directly: {}", addr);
-
-            for addr in addrs {
-                if let Ok(downstream) = TcpStream::connect(addr).await {
-                    Self::prepare_for_streamming(
-                        http_request,
-                        upstream,
-                        downstream,
-                        traffic_data_sender,
-                        buf,
-                        total_read,
+                    Self::start_stream_transfer(
+                        &mut inbound_stream,
+                        outbound_stream,
+                        &traffic_data_sender,
                     )
                     .await?;
+                }
 
-                    return Ok(());
+                None => {
+                    proxy_handler
+                        .handle_outbound_failure(&mut inbound_stream)
+                        .await?;
                 }
             }
 
-            utils::write_to_stream(&mut upstream, HTTP_RESP_502).await?;
-            return Err(ProxyError::BadGateway(anyhow!(
-                "cannot connect to {}",
-                addr
-            )));
+            break;
         }
+        Ok(())
     }
 
-    async fn prepare_for_streamming<'a>(
-        http_request: HttpRequest,
-        mut upstream: TcpStream,
-        mut downstream: TcpStream,
-        traffic_data_sender: Sender<TrafficData>,
-        buf: Block<'a>,
-        total_read: usize,
-    ) -> Result<(), ProxyError> {
-        let mut payload_start_index: usize = 0;
-        if http_request.is_connect_request() {
-            payload_start_index = http_request.header_len;
-            utils::write_to_stream(&mut upstream, HTTP_RESP_200).await?;
-        }
-
-        if payload_start_index < total_read {
-            let header = str::from_utf8(&buf[payload_start_index..total_read])
-                .context("failed to convert header as UTF-8 string")
-                .map_err(|_| ProxyError::BadRequest)?
-                .replace("Proxy-Connection", "Connection")
-                .replace("proxy-connection", "Connection");
-
-            utils::write_to_stream(&mut downstream, header.as_bytes()).await?;
-
-            if http_request.header_len < total_read {
-                utils::write_to_stream(&mut downstream, &buf[http_request.header_len..total_read])
-                    .await?;
-            }
-        }
-
-        traffic_data_sender
-            .send(TrafficData {
-                tx_bytes: total_read as u64,
-                rx_bytes: 0,
-            })
+    async fn create_tcp_stream(ip: IpAddr, port: u16) -> Option<TcpStream> {
+        TcpStream::connect(SocketAddr::new(ip, port))
             .await
-            .ok();
-
-        Self::start_stream_transfer(&mut upstream, &mut downstream, &traffic_data_sender).await?;
-
-        Ok(())
+            .map_err(|e| {
+                error!("failed to connect to address: {}:{}, err:{}", ip, port, e);
+                e
+            })
+            .ok()
     }
 
     fn matches_proxy_rule(
@@ -442,7 +403,7 @@ impl Server {
         debug!(
             "transfer, out:{}, in:{}, {:?} <-> {:?}",
             tx_bytes,
-            tx_bytes,
+            rx_bytes,
             a_stream.local_addr(),
             b_stream.local_addr()
         );
