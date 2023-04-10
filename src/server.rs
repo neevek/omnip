@@ -319,12 +319,10 @@ impl Server {
 
                         let mut outbound_stream = None;
                         for ip in ip_arr {
-                            if !ip.is_unspecified() {
-                                let stream = Self::create_tcp_stream(ip, addr.port).await;
-                                if stream.is_some() {
-                                    outbound_stream = stream;
-                                    break;
-                                }
+                            let stream = Self::create_tcp_stream(ip, addr.port).await;
+                            if stream.is_some() {
+                                outbound_stream = stream;
+                                break;
                             }
                         }
 
@@ -362,6 +360,10 @@ impl Server {
     }
 
     async fn create_tcp_stream(ip: IpAddr, port: u16) -> Option<TcpStream> {
+        if ip.is_unspecified() {
+            return None;
+        }
+
         TcpStream::connect(SocketAddr::new(ip, port))
             .await
             .map_err(|e| {

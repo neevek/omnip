@@ -151,7 +151,7 @@ impl SocksRespParser {
             }
         }
 
-        true
+        false
     }
 
     fn fail_with_general_error(&mut self) -> bool {
