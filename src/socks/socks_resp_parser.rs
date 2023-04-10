@@ -7,7 +7,7 @@ use super::{SocksError, SocksVersion};
 
 #[derive(PartialEq, Debug)]
 pub(crate) enum State {
-    IdentifyMethod,
+    SelectMethod,
     IdentifyingMethod,
     Connect,
     Connecting,
@@ -26,7 +26,7 @@ impl SocksRespParser {
         SocksRespParser {
             socks_version: socks_version.clone(),
             state: match socks_version {
-                SocksVersion::V5 => State::IdentifyMethod,
+                SocksVersion::V5 => State::SelectMethod,
                 SocksVersion::V4 => State::Connect,
             },
             buffer: ByteBuffer::new(),
@@ -47,7 +47,7 @@ impl SocksRespParser {
             return self.fail_with_general_error();
         }
 
-        if self.state == State::IdentifyMethod {
+        if self.state == State::SelectMethod {
             self.state = State::IdentifyingMethod;
             if self.buffer.len() != 2 {
                 error!("unexpected socks response length: {}", self.buffer.len());

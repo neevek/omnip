@@ -244,15 +244,12 @@ impl Server {
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
-        let mut total_read = 0;
         loop {
             let nread = inbound_stream
                 .read(&mut buffer)
                 .await
                 .context("failed to read from inbound_stream")
                 .map_err(|_| ProxyError::BadRequest)?;
-
-            total_read += nread;
 
             let addr = match proxy_handler.parse(&buffer[..nread]) {
                 ParseState::Pending => {

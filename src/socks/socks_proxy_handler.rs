@@ -13,10 +13,6 @@ use std::{
 };
 use tokio::net::TcpStream;
 
-// const INITIAL_SOCKS_REQUEST_HEADER_SIZE: usize = 128;
-// const MAX_SOCKS_REQUEST_HEADER_SIZE: usize = 512;
-// const MAX_RESPONSE_LENGTH: usize = 22;
-
 #[derive(PartialEq, Debug)]
 pub(crate) enum InternalParseState {
     SelectMethod,

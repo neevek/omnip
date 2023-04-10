@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 use crate::{utils, Host, NetAddr, ProxyError};
 
 use super::{
-    socks_resp_parser::{self, SocksRespParser},
+    socks_resp_parser::{SocksRespParser, State},
     SocksVersion,
 };
 
@@ -19,20 +19,15 @@ impl SocksReq {
         outbound_stream: &mut TcpStream,
         dst_addr: &NetAddr,
     ) -> Result<(), ProxyError> {
-        // let mut outbound_stream = TcpStream::connect(socks_server_addr).await.map_err(|e| {
-        //     error!("failed to connect: {}", e);
-        //     ProxyError::ConnectionRefused
-        // })?;
-
         let mut resp_parser = SocksRespParser::new(socks_version);
         let mut buf = [0u8; 512];
         loop {
             match *resp_parser.state() {
-                socks_resp_parser::State::IdentifyMethod => {
+                State::SelectMethod => {
                     utils::write_to_stream(outbound_stream, "\x05\x01\x00".as_ref()).await?;
                 }
 
-                socks_resp_parser::State::Connect => {
+                State::Connect => {
                     let mut connect_command = ByteBuffer::<512>::new();
                     match *resp_parser.socks_version() {
                         SocksVersion::V5 => {
@@ -97,7 +92,7 @@ impl SocksReq {
                 return Err(ProxyError::InternalError);
             }
 
-            if resp_parser.state() == &socks_resp_parser::State::NegotiationCompleted {
+            if resp_parser.state() == &State::NegotiationCompleted {
                 break;
             }
         }

@@ -60,7 +60,7 @@ impl HttpReq {
         }
 
         Err(ProxyError::BadGateway(anyhow!(
-            "no valid response from proxy server"
+            "invalid response from proxy server"
         )))
     }
 }

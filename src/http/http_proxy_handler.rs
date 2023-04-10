@@ -115,42 +115,37 @@ impl ProxyHandler for HttpProxyHandler<'_> {
         outbound_stream: &mut TcpStream,
         inbound_stream: &mut TcpStream,
     ) -> Result<(), ProxyError> {
-        match self.http_request {
-            Some(ref http_request) => {
-                match outbound_type {
-                    OutboundType::Direct => {
-                        if http_request.is_connect_request() {
-                            utils::write_to_stream(inbound_stream, HTTP_RESP_200).await?;
-                        } else {
-                            let header = std::str::from_utf8(http_request.header())
-                                .context("failed to convert header as UTF-8 string")
-                                .map_err(|_| ProxyError::BadRequest)?
-                                .replace("Proxy-Connection", "Connection")
-                                .replace("proxy-connection", "Connection");
-                            utils::write_to_stream(outbound_stream, header.as_bytes()).await?;
-                        }
-
-                        let body = http_request.body();
-                        if body.len() > 0 {
-                            utils::write_to_stream(outbound_stream, body).await?;
-                        }
-
-                        Ok(())
-                    }
-
-                    OutboundType::HttpProxy => {
-                        // simply forward the complete http proxy request
-                        utils::write_to_stream(outbound_stream, http_request.payload()).await
-                    }
-
-                    OutboundType::SocksProxy(ver) => {
-                        SocksReq::handshake(ver, outbound_stream, http_request.target_addr())
-                            .await?;
-                        utils::write_to_stream(inbound_stream, HTTP_RESP_200).await
-                    }
+        let http_request = unwrap_or_return!(&self.http_request, Err(ProxyError::BadRequest));
+        match outbound_type {
+            OutboundType::Direct => {
+                if http_request.is_connect_request() {
+                    utils::write_to_stream(inbound_stream, HTTP_RESP_200).await?;
+                } else {
+                    let header = std::str::from_utf8(http_request.header())
+                        .context("failed to convert header as UTF-8 string")
+                        .map_err(|_| ProxyError::BadRequest)?
+                        .replace("Proxy-Connection", "Connection")
+                        .replace("proxy-connection", "Connection");
+                    utils::write_to_stream(outbound_stream, header.as_bytes()).await?;
                 }
+
+                let body = http_request.body();
+                if body.len() > 0 {
+                    utils::write_to_stream(outbound_stream, body).await?;
+                }
+
+                Ok(())
             }
-            None => Err(ProxyError::BadRequest),
+
+            OutboundType::HttpProxy => {
+                // simply forward the complete http proxy request
+                utils::write_to_stream(outbound_stream, http_request.payload()).await
+            }
+
+            OutboundType::SocksProxy(ver) => {
+                SocksReq::handshake(ver, outbound_stream, http_request.target_addr()).await?;
+                utils::write_to_stream(inbound_stream, HTTP_RESP_200).await
+            }
         }
     }
 
