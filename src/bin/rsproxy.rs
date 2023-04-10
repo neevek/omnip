@@ -44,11 +44,11 @@ fn main() {
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct RsproxyArgs {
-    /// Server address [<http|socks|socks5|socks4>://][ip:]port, for example: http://127.0.0.1:8000
+    /// Server address [<http|socks5|socks4>://][ip:]port, for example: http://127.0.0.1:8000
     #[clap(short = 'a', long, required = true, display_order = 1)]
     addr: String,
 
-    /// downstream which the proxy server will relay traffic to based on proxy rules, http://ip:port | socks5://ip:port | socks4://ip:port
+    /// downstream which the proxy server will relay traffic to based on proxy rules, [<http|socks5|socks4>://]ip:port
     #[clap(short = 'd', long, default_value = "", display_order = 2)]
     downstream: String,
 

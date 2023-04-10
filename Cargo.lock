@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "rsproxy"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "android_logger 0.10.1",
  "anyhow",
