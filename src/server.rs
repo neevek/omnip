@@ -55,7 +55,7 @@ pub struct Server {
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     resolver: Option<Arc<DNSResolver>>,
     system_resolver: Option<Arc<DNSResolver>>,
-    watcher: Option<Box<dyn Watcher>>,
+    watcher: Option<Box<dyn Watcher + Send>>,
     scheduled_start: bool,
     server_info_bridge: ServerInfoBridge,
     on_info_report_enabled: bool,
@@ -82,6 +82,10 @@ impl Server {
         self.scheduled_start = true;
     }
 
+    pub fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     pub fn start_and_block(&mut self) -> Result<()> {
         self.setup_proxy_rules_manager()?;
 
@@ -105,7 +109,7 @@ impl Server {
             .unwrap()
             .block_on(async {
                 self.bind().await.ok();
-                self.serve().await.ok();
+                self.serve().await;
             });
 
         self.set_and_post_server_state(ServerState::Terminated);
@@ -113,21 +117,32 @@ impl Server {
         Ok(())
     }
 
-    pub async fn bind(&mut self) -> Result<()> {
-        let tcp_listener = TcpListener::bind(self.config.addr).await.context(format!(
-            "failed to bind server on address: {}",
-            self.config.addr
-        ))?;
-
-        info!("server bound to {}", self.config.addr);
+    pub async fn bind(&mut self) -> Result<SocketAddr> {
+        let tcp_listener = TcpListener::bind(self.config.addr).await.map_err(|e| {
+            error!(
+                "failed to bind proxy server on address: {}",
+                self.config.addr
+            );
+            e
+        })?;
+        let socket_addr = tcp_listener.local_addr().unwrap();
+        info!(
+            "proxy server is bound on address: {}, type: {}",
+            socket_addr, self.config.server_type
+        );
         self.tcp_listener = Some(tcp_listener);
 
-        Ok(())
+        Ok(socket_addr)
     }
 
-    pub async fn serve(&mut self) -> Result<()> {
+    pub async fn serve_async(mut self) {
+        tokio::spawn(async move { self.serve().await });
+    }
+
+    pub async fn serve(&mut self) {
         if self.tcp_listener.is_none() {
-            log_and_bail!("bind the server first");
+            error!("bind the proxy server first");
+            return;
         }
 
         self.set_and_post_server_state(ServerState::ResolvingDNS);
@@ -163,8 +178,6 @@ impl Server {
         self.resolver = Some(resolver);
         self.system_resolver = Some(system_resolver);
 
-        info!("started listening, addr: {}", self.config.addr);
-
         self.set_and_post_server_state(ServerState::Running);
 
         let (traffic_data_sender, traffic_data_receiver) =
@@ -172,6 +185,13 @@ impl Server {
         self.collect_and_report_traffic_data(traffic_data_receiver);
 
         let listener = self.tcp_listener.as_ref().unwrap();
+
+        info!(
+            "proxy server started listening, addr: {}, type: {}",
+            listener.local_addr().unwrap(),
+            self.config.server_type
+        );
+
         loop {
             match listener.accept().await {
                 Ok((inbound_stream, _addr)) => {
@@ -214,11 +234,11 @@ impl Server {
 
     fn create_proxy_handler(&self) -> Box<dyn ProxyHandler + Send + Sync> {
         match self.config.server_type {
-            ServerType::HTTP => Box::new(HttpProxyHandler::new()),
-            ServerType::SOCKS5 => {
+            ServerType::Http => Box::new(HttpProxyHandler::new()),
+            ServerType::Socks5 => {
                 Box::new(SocksProxyHandler::new(SocksVersion::V5, self.config.addr))
             }
-            ServerType::SOCKS4 => {
+            ServerType::Socks4 => {
                 Box::new(SocksProxyHandler::new(SocksVersion::V4, self.config.addr))
             }
         }
@@ -275,9 +295,9 @@ impl Server {
                     || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
                 {
                     outbound_type = match downstream_type.unwrap() {
-                        ServerType::HTTP => OutboundType::HttpProxy,
-                        ServerType::SOCKS4 => OutboundType::SocksProxy(SocksVersion::V4),
-                        ServerType::SOCKS5 => OutboundType::SocksProxy(SocksVersion::V5),
+                        ServerType::Http => OutboundType::HttpProxy,
+                        ServerType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
+                        ServerType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
                     };
 
                     debug!(

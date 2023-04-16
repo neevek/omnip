@@ -1,6 +1,7 @@
 mod http;
 mod proxy_handler;
 mod proxy_rule_manager;
+mod quic;
 mod server;
 mod server_info_bridge;
 mod socks;
@@ -11,9 +12,11 @@ use byte_pool::{Block, BytePool};
 use lazy_static::lazy_static;
 use log::error;
 pub use proxy_rule_manager::ProxyRuleManager;
+pub use quic::quic_client::QuicClient;
+pub use quic::quic_server::QuicServer;
 pub use server::Server;
 use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
     [".home", ".lan", ".corp", ".intranet", ".private"];
@@ -116,9 +119,37 @@ impl std::fmt::Display for NetAddr {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum ServerType {
-    HTTP,
-    SOCKS5,
-    SOCKS4,
+    Http,
+    Socks5,
+    Socks4,
+}
+
+impl std::fmt::Display for ServerType {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let msg = match self {
+            ServerType::Http => "HTTP",
+            ServerType::Socks5 => "SOCKS5",
+            ServerType::Socks4 => "SOCKS4",
+        };
+        formatter.write_fmt(format_args!("{}", msg))
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum LayeredServerType {
+    HttpOverQuic,
+    Socks5OverQuic,
+    Socks4OverQuic,
+}
+
+impl LayeredServerType {
+    pub fn get_basic_type(&self) -> ServerType {
+        match self {
+            LayeredServerType::HttpOverQuic => ServerType::Http,
+            LayeredServerType::Socks5OverQuic => ServerType::Socks5,
+            LayeredServerType::Socks4OverQuic => ServerType::Socks4,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -134,6 +165,31 @@ pub struct Config {
     pub watch_proxy_rules_change: bool,
 }
 
+#[derive(Debug)]
+pub struct QuicServerConfig {
+    pub server_addr: SocketAddr,
+    pub downstream_addr: SocketAddr,
+    pub cert: String,
+    pub key: String,
+    pub password: String,
+    pub max_idle_timeout_ms: u64,
+}
+
+#[derive(Debug)]
+pub struct QuicClientConfig {
+    pub server_addr: String,
+    pub local_access_server_addr: SocketAddr,
+    pub cert: String,
+    pub key: String,
+    pub password: String,
+    pub cipher: String,
+    pub max_idle_timeout_ms: u64,
+}
+
+pub fn local_ipv4_socket_addr_with_unspecified_port() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
 pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {
     let mut addr = addr.to_string();
     let mut start_pos = 0;
@@ -146,27 +202,33 @@ pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {
     addr.parse().ok()
 }
 
-pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<SocketAddr>) {
-    const SUPPORTED_PROTOCOLS: &[(ServerType, &str)] = &[
-        (ServerType::HTTP, "http://"),
-        (ServerType::SOCKS5, "socks5://"),
-        (ServerType::SOCKS4, "socks4://"),
+#[rustfmt::skip]
+pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<LayeredServerType>, Option<SocketAddr>) {
+    let supported_protocols: &[(ServerType, Option<LayeredServerType>, &str)] = &[
+        (ServerType::Http, None, "http://"),
+        (ServerType::Socks5, None, "socks5://"),
+        (ServerType::Socks4, None, "socks4://"),
+        (ServerType::Http, Some(LayeredServerType::HttpOverQuic), "http+quic://"),
+        (ServerType::Socks5, Some(LayeredServerType::Socks5OverQuic), "socks5+quic://"),
+        (ServerType::Socks4, Some(LayeredServerType::Socks4OverQuic), "socks4+quic://"),
     ];
 
-    let mut downstream_type = None;
-    SUPPORTED_PROTOCOLS.iter().for_each(|v| {
-        if addr.starts_with(v.1) {
-            downstream_type = Some(v.0.clone());
+    let mut server_type = None;
+    let mut layered_type = None;
+    supported_protocols.iter().for_each(|v| {
+        if addr.starts_with(v.2) {
+            server_type = Some(v.0.clone());
+            layered_type = v.1.clone();
         }
     });
 
-    if downstream_type == None {
+    if server_type == None {
         if addr.find("://").is_some() {
-            error!("invalid downstream protocol, address: {}", addr);
-            return (None, None);
+            error!("invalid server protocol, address: {}", addr);
+            return (None, None, None);
         }
-        // default to HTTP
-        downstream_type = Some(ServerType::HTTP);
+        // default to Http
+        server_type = Some(ServerType::Http);
     }
 
     let start_index = addr.find("://").map_or_else(|| 0, |index| index + 3);
@@ -181,10 +243,17 @@ pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<SocketAddr>)
     }
 
     if let Ok(addr) = addr.parse() {
-        return (downstream_type, Some(addr));
+        return (server_type, layered_type, Some(addr));
     }
 
-    (None, None)
+    match layered_type {
+        // address may be a domain name, but domain name is allowed only for layered_server_type
+        Some(_) => (server_type, layered_type, None),
+        None => {
+            error!("invalid server address: {}", addr);
+            (None, None, None)
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
