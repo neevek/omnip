@@ -249,10 +249,7 @@ pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<LayeredServe
     match layered_type {
         // address may be a domain name, but domain name is allowed only for layered_server_type
         Some(_) => (server_type, layered_type, None),
-        None => {
-            error!("invalid server address: {}", addr);
-            (None, None, None)
-        }
+        None => (None, None, None)
     }
 }
 
