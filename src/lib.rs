@@ -226,6 +226,10 @@ pub fn parse_server_addr(
     Option<NetAddr>,
     bool // is_layered_proto
 ) {
+    if addr.trim().is_empty() {
+        return (None, None, false);
+    }
+
     let supported_protocols: &[(ProtoType, Option<LayeredProtoType>, &str)] = &[
         (ProtoType::Http, None, "http"),
         (ProtoType::Socks5, None, "socks5"),

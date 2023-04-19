@@ -27,7 +27,8 @@ fn main() -> Result<()> {
         max_idle_timeout_ms: args.max_idle_timeout_ms,
     };
 
-    Server::run(config, common_quic_config)
+    let mut server = Server::new(config, common_quic_config);
+    server.run()
 }
 
 #[derive(Parser, Debug)]

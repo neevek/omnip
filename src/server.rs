@@ -20,7 +20,7 @@ use std::fmt::Display;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{
@@ -52,70 +52,60 @@ impl Display for ServerState {
     }
 }
 
-pub struct Server {
-    config: Config,
-    tcp_listener: Option<TcpListener>,
+struct ThreadSafeState {
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-    resolver: Option<Arc<DNSResolver>>,
-    system_resolver: Option<Arc<DNSResolver>>,
     watcher: Option<Box<dyn Watcher + Send>>,
     scheduled_start: bool,
-    server_info_bridge: ServerInfoBridge,
     on_info_report_enabled: bool,
+    server_info_bridge: ServerInfoBridge,
     state: ServerState,
 }
 
-impl Server {
-    pub fn new(config: Config) -> Self {
-        Server {
-            config,
-            tcp_listener: None,
+impl ThreadSafeState {
+    fn new() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
             proxy_rule_manager: None,
-            resolver: None,
-            system_resolver: None,
             watcher: None,
             scheduled_start: false,
-            server_info_bridge: ServerInfoBridge::new(),
             on_info_report_enabled: false,
+            server_info_bridge: ServerInfoBridge::new(),
             state: ServerState::Idle,
-        }
+        }))
+    }
+}
+
+macro_rules! inner_state {
+    ($self:ident, $field:ident) => {
+        (*$self.inner_state.lock().unwrap()).$field
+    };
+}
+
+pub struct Server {
+    config: Config,
+    common_quic_config: CommonQuicConfig,
+    inner_state: Arc<Mutex<ThreadSafeState>>,
+}
+
+impl Server {
+    pub fn new(config: Config, common_quic_config: CommonQuicConfig) -> Arc<Self> {
+        Arc::new(Server {
+            config,
+            common_quic_config,
+            inner_state: ThreadSafeState::new(),
+        })
     }
 
-    pub fn set_scheduled_start(&mut self) {
-        self.scheduled_start = true;
+    pub fn set_scheduled_start(self: &Arc<Self>) {
+        inner_state!(self, scheduled_start) = true;
     }
 
-    pub fn run(mut config: Config, common_quic_config: CommonQuicConfig) -> Result<()> {
+    pub fn run(self: &mut Arc<Self>) -> Result<()> {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .worker_threads(config.threads)
+            .worker_threads(self.config.threads)
             .build()
             .unwrap()
             .block_on(async {
-                let require_quic_server = config.is_layered_proto;
-                let require_quic_client = config.is_downstream_layered_proto;
-
-                let mut quic_client = None;
-                if require_quic_client {
-                    let quic_client_config = QuicClientConfig {
-                        server_addr: NetAddr::from_socket_addr(config.downstream_addr.unwrap()),
-                        local_access_server_addr:
-                            crate::local_ipv4_socket_addr_with_unspecified_port(),
-                        common_cfg: common_quic_config.clone(),
-                    };
-
-                    let mut client = QuicClient::new(quic_client_config);
-                    client.start_access_server().await?;
-                    config.downstream_addr = client.access_server_addr();
-                    quic_client = Some(client);
-                }
-
-                let orig_server_addr = config.addr;
-                if require_quic_server {
-                    config.addr = crate::local_ipv4_socket_addr_with_unspecified_port();
-                }
-
-                let mut proxy_server = Server::new(config);
                 #[cfg(target_os = "android")]
                 {
                     proxy_server.set_enable_on_info_report(true);
@@ -124,10 +114,46 @@ impl Server {
                     });
                 }
 
-                let proxy_addr = proxy_server.bind().await?;
+                let require_quic_server = self.config.is_layered_proto;
+                let require_quic_client = self.config.is_downstream_layered_proto;
+                let mut proxy_downstream_addr = self.config.downstream_addr;
+                let mut quic_client = None;
+
+                if require_quic_client {
+                    let quic_client_config = QuicClientConfig {
+                        server_addr: NetAddr::from_socket_addr(proxy_downstream_addr.unwrap()),
+                        local_access_server_addr:
+                            crate::local_ipv4_socket_addr_with_unspecified_port(),
+                        common_cfg: self.common_quic_config.clone(),
+                    };
+
+                    let mut client = QuicClient::new(quic_client_config);
+                    client.start_access_server().await?;
+                    // make QUIC tunnel as the downstream of the proxy_server
+                    proxy_downstream_addr = client.access_server_addr();
+                    quic_client = Some(client);
+                }
+
+                let orig_server_addr = self.config.addr;
+                let proxy_server_addr = if require_quic_server {
+                    crate::local_ipv4_socket_addr_with_unspecified_port()
+                } else {
+                    orig_server_addr
+                };
+
+                let proxy_listener = self.bind(proxy_server_addr).await?;
+
+                let proxy_addr = proxy_listener.local_addr().unwrap();
+                info!("==========================================================");
+                info!(
+                    "proxy server bound to: {}, type: {}",
+                    proxy_addr, self.config.server_type
+                );
+                info!("==========================================================");
 
                 if require_quic_server || require_quic_client {
-                    proxy_server.serve_async().await;
+                    self.serve_async(proxy_listener, proxy_downstream_addr)
+                        .await;
 
                     if let Some(mut qc) = quic_client {
                         qc.connect_and_serve().await;
@@ -136,55 +162,45 @@ impl Server {
                     if require_quic_server {
                         let quic_server_config = QuicServerConfig {
                             server_addr: orig_server_addr,
-                            downstream_addr: proxy_addr,
-                            common_cfg: common_quic_config.clone(),
+                            downstream_addr: proxy_addr, // use proxy as the downstream of the QUIC tunnel
+                            common_cfg: self.common_quic_config.clone(),
                         };
                         let mut quic_server = QuicServer::new(quic_server_config);
                         quic_server.bind().await?;
                         quic_server.serve().await;
                     }
                 } else {
-                    proxy_server.serve().await;
+                    self.serve(proxy_listener, proxy_downstream_addr).await;
                 }
 
                 Ok::<(), anyhow::Error>(())
             })
     }
 
-    pub async fn bind(&mut self) -> Result<SocketAddr> {
+    async fn bind(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
         self.set_and_post_server_state(ServerState::Preparing);
-
         self.setup_proxy_rules_manager()?;
 
-        let tcp_listener = TcpListener::bind(self.config.addr).await.map_err(|e| {
-            error!(
-                "failed to bind proxy server on address: {}",
-                self.config.addr
-            );
+        Ok(TcpListener::bind(addr).await.map_err(|e| {
+            error!("failed to bind proxy server on address: {}", addr);
             e
-        })?;
-        let socket_addr = tcp_listener.local_addr().unwrap();
-        info!("==========================================================");
-        info!(
-            "proxy server bound to: {}, type: {}",
-            socket_addr, self.config.server_type
-        );
-        info!("==========================================================");
-        self.tcp_listener = Some(tcp_listener);
-
-        Ok(socket_addr)
+        })?)
     }
 
-    pub async fn serve_async(mut self) {
-        tokio::spawn(async move { self.serve().await });
+    async fn serve_async(
+        self: &Arc<Self>,
+        proxy_listener: TcpListener,
+        downstream_addr: Option<SocketAddr>,
+    ) {
+        let mut this = self.clone();
+        tokio::spawn(async move { this.serve(proxy_listener, downstream_addr).await });
     }
 
-    pub async fn serve(&mut self) {
-        if self.tcp_listener.is_none() {
-            error!("bind the proxy server first");
-            return;
-        }
-
+    async fn serve(
+        self: &mut Arc<Self>,
+        proxy_listener: TcpListener,
+        downstream_addr: Option<SocketAddr>,
+    ) {
         self.set_and_post_server_state(ServerState::ResolvingDNS);
 
         let resolver = Arc::new(
@@ -215,31 +231,25 @@ impl Server {
             Box::new(resolver.resolver_type().to_string()),
         ));
 
-        self.resolver = Some(resolver);
-        self.system_resolver = Some(system_resolver);
-
         self.set_and_post_server_state(ServerState::Running);
 
         let (traffic_data_sender, traffic_data_receiver) =
             channel::<TrafficData>(TRAFFIC_DATA_QUEUE_SIZE);
         self.collect_and_report_traffic_data(traffic_data_receiver);
 
-        let listener = self.tcp_listener.as_ref().unwrap();
-
         info!(
             "proxy server started listening, addr: {}, type: {}",
-            listener.local_addr().unwrap(),
+            proxy_listener.local_addr().unwrap(),
             self.config.server_type
         );
 
-        let downstream_addr = self.config.downstream_addr;
         loop {
-            match listener.accept().await {
+            match proxy_listener.accept().await {
                 Ok((inbound_stream, _addr)) => {
-                    let resolver = self.resolver.as_ref().unwrap().clone();
-                    let system_resolver = self.system_resolver.as_ref().unwrap().clone();
+                    let resolver = resolver.clone();
+                    let system_resolver = system_resolver.clone();
                     let downstream_type = self.config.downstream_type.clone();
-                    let proxy_rule_manager = self.proxy_rule_manager.clone();
+                    let proxy_rule_manager = inner_state!(self, proxy_rule_manager).clone();
                     let traffic_data_sender = traffic_data_sender.clone();
                     let handler = self.create_proxy_handler();
 
@@ -285,11 +295,11 @@ impl Server {
     }
 
     pub fn has_scheduled_start(&self) -> bool {
-        self.scheduled_start
+        inner_state!(self, scheduled_start)
     }
 
     pub fn get_state(&self) -> ServerState {
-        self.state.clone()
+        inner_state!(self, state).clone()
     }
 
     async fn process_stream(
@@ -476,7 +486,7 @@ impl Server {
     }
 
     fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<TrafficData>) {
-        let server_info_bridge = self.server_info_bridge.clone();
+        let inner_state = self.inner_state.clone();
         tokio::spawn(async move {
             let mut total_rx_bytes = 0;
             let mut total_tx_bytes = 0;
@@ -492,13 +502,17 @@ impl Server {
                     let elapsed_time = elpased.as_secs();
                     if elapsed_time - last_elapsed_time > POST_TRAFFIC_DATA_INTERVAL_SECS {
                         last_elapsed_time = elapsed_time;
-                        server_info_bridge.post_server_info(&ServerInfo::new(
-                            ServerInfoType::Traffic,
-                            Box::new(TrafficData {
-                                rx_bytes: total_rx_bytes,
-                                tx_bytes: total_tx_bytes,
-                            }),
-                        ));
+                        inner_state
+                            .lock()
+                            .unwrap()
+                            .server_info_bridge
+                            .post_server_info(&ServerInfo::new(
+                                ServerInfoType::Traffic,
+                                Box::new(TrafficData {
+                                    rx_bytes: total_rx_bytes,
+                                    tx_bytes: total_tx_bytes,
+                                }),
+                            ));
                     }
                 }
             }
@@ -506,13 +520,18 @@ impl Server {
         });
     }
 
-    fn setup_proxy_rules_manager(&mut self) -> Result<()> {
+    fn setup_proxy_rules_manager(self: &Arc<Self>) -> Result<()> {
         let proxy_rules_file = &self.config.proxy_rules_file;
         if !proxy_rules_file.is_empty() && !Path::new(proxy_rules_file).is_file() {
             log_and_bail!("proxy rules file does not exist: {}", proxy_rules_file);
         }
 
         if !proxy_rules_file.is_empty() {
+            if self.config.downstream_addr.is_none() {
+                log::warn!("no downstream specified, proxy rules ignored.");
+                return Ok(());
+            }
+
             let mut prm = ProxyRuleManager::default();
             let count = prm.add_rules_by_file(proxy_rules_file);
 
@@ -521,7 +540,7 @@ impl Server {
                 count, proxy_rules_file
             );
 
-            self.proxy_rule_manager = Some(Arc::new(RwLock::new(prm)));
+            inner_state!(self, proxy_rule_manager) = Some(Arc::new(RwLock::new(prm)));
 
             if self.config.watch_proxy_rules_change {
                 info!("will watch proxy rules change");
@@ -533,7 +552,7 @@ impl Server {
         Ok(())
     }
 
-    fn watch_proxy_rules_file(&mut self, proxy_rules_file: String) -> Result<()> {
+    fn watch_proxy_rules_file(self: &Arc<Self>, proxy_rules_file: String) -> Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(
             move |res| {
@@ -547,9 +566,9 @@ impl Server {
             RecursiveMode::NonRecursive,
         )?;
 
-        self.watcher = Some(Box::new(watcher));
+        inner_state!(self, watcher) = Some(Box::new(watcher));
 
-        let prm = self.proxy_rule_manager.clone().unwrap();
+        let prm = inner_state!(self, proxy_rule_manager).clone().unwrap();
         std::thread::spawn(move || {
             loop {
                 match rx.recv() {
@@ -581,34 +600,37 @@ impl Server {
         Ok(())
     }
 
-    fn set_and_post_server_state(&mut self, state: ServerState) {
+    fn set_and_post_server_state(self: &Arc<Self>, state: ServerState) {
         info!("client state: {}", state);
-        self.state = state;
+        inner_state!(self, state) = state.clone();
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ServerState,
-            Box::new(self.state.to_string()),
+            Box::new(state.to_string()),
         ));
     }
 
-    fn post_server_info<T>(&self, server_info: ServerInfo<T>)
+    fn post_server_info<T>(self: &Arc<Self>, server_info: ServerInfo<T>)
     where
         T: ?Sized + Serialize,
     {
-        if self.on_info_report_enabled {
-            self.server_info_bridge.post_server_info(&server_info);
+        if inner_state!(self, on_info_report_enabled) {
+            inner_state!(self, server_info_bridge).post_server_info(&server_info);
         }
     }
 
-    pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static + Send + Sync) {
-        self.server_info_bridge.set_listener(callback);
+    pub fn set_on_info_listener(
+        self: &Arc<Self>,
+        callback: impl FnMut(&str) + 'static + Send + Sync,
+    ) {
+        inner_state!(self, server_info_bridge).set_listener(callback);
     }
 
-    pub fn has_on_info_listener(&self) -> bool {
-        self.server_info_bridge.has_listener()
+    pub fn has_on_info_listener(self: &Arc<Self>) -> bool {
+        inner_state!(self, server_info_bridge).has_listener()
     }
 
-    pub fn set_enable_on_info_report(&mut self, enable: bool) {
+    pub fn set_enable_on_info_report(self: &Arc<Self>, enable: bool) {
         info!("set_enable_on_info_report, enable:{}", enable);
-        self.on_info_report_enabled = enable
+        inner_state!(self, on_info_report_enabled) = enable
     }
 }
