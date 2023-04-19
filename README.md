@@ -1,4 +1,4 @@
-rsproxy
+rsproxy - HTTP / SOCKS over QUIC
 =======
 
 An all in one proxy implementation written in Rust.
@@ -7,23 +7,22 @@ Features
 --------
 
 1. Supports [HTTP tunneling](https://en.wikipedia.org/wiki/HTTP_tunnel) and basic HTTP proxy.
-2. Supports `CONNECT` command of both [SOCKS5](https://www.rfc-editor.org/rfc/rfc1928) and [SOCKS4](https://www.openssh.com/txt/socks4.protocol) with [SOCKS4a](https://www.openssh.com/txt/socks4a.protocol) extension. In the case of being a node in a proxy chain, the implementation always delays DNS resolution to the next node, only when acting as the last node will it resolves DNS.
+2. Supports `CONNECT` command of both [SOCKS5](https://www.rfc-editor.org/rfc/rfc1928) and [SOCKS4](https://www.openssh.com/txt/socks4.protocol) with [SOCKS4a](https://www.openssh.com/txt/socks4a.protocol) extension. In the case of being a node in a proxy chain, the implementation always delays DNS resolution to the next node, only when acting as the last node will it resolve DNS.
 3. Proxy chaining with the `--downstream` option. e.g. `--downstream http://ip:port` or `--downstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
 4. Proxy over [QUIC](https://quicwg.org/), i.e. `http+quic`, `socks5+quic` and `socks4+quic`. For example:
-    * Start a QUIC server backed by an HTTP proxy on a remote server:
-      * `rsproxy -a http+quic://0.0.0.0:3515 --password 123456`
-    * Start a local SOCKS5 proxy and forward all its traffic to the server through QUIC tunnel (everything is encrypted):
-      * `rsproxy -a socks5://127.0.0.1:9000 --password 123456 --downstream http+quic://SERVER_IP:3515`
+    * Start a QUIC server backed by an HTTP proxy on a remote server (HTTP proxy over QUIC):
+      * `rsproxy -a http+quic://0.0.0.0:3515`
+    * Start a local SOCKS5 proxy and forward all its traffic to the HTTP proxy server through QUIC tunnel (everything is encrypted):
+      * `rsproxy -a socks5://127.0.0.1:9000 --downstream http+quic://DOMAIN:3515`
 
-    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which rsproxy uses to implement proxy over QUIC.
+    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which rsproxy uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
 
-5. Supports simple proxy rules, traffic will be relayed to downstream if the requested domain matches one of the proxy rules, for example:
+5. Supports simple proxy rules, traffic will be relayed to downstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
     * example.com
     * .example.com
     * ||example.com
     * ...
-6. DoT (DNS-over-TLS) or custom name servers are supported.
-7. JNI interface provided for Androd (Java/Kotlin), see [lib.rs](https://github.com/neevek/rsproxy/blob/master/src/lib.rs).
+6. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
 
 
 ```

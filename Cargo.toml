@@ -25,8 +25,8 @@ serde_json = "1.0"
 lazy_static = "1.4"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
-rstun = { path = "../rstun" }
-# rstun = { git = "https://github.com/neevek/rstun" }
+# rstun = { path = "../rstun" }
+rstun = { git = "https://github.com/neevek/rstun" }
 
 [target.aarch64-linux-android.dependencies]
 jni = "0.19"
@@ -43,5 +43,5 @@ android_logger = "0.10"
 [profile.release]
 opt-level = "z"
 strip = true
-panic = "abort"
+# panic = "abort"
 lto = "fat"
