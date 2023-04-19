@@ -82,42 +82,11 @@ impl Server {
         self.scheduled_start = true;
     }
 
-    pub fn init(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn start_and_block(&mut self) -> Result<()> {
-        self.setup_proxy_rules_manager()?;
-
-        if let Some(addr) = self.config.downstream_addr {
-            info!("using outbound_stream: {}", addr);
-        }
-
-        let worker_threads = if self.config.threads > 0 {
-            self.config.threads
-        } else {
-            num_cpus::get()
-        };
-        info!("will use {} worker threads", worker_threads);
-
+    pub async fn bind(&mut self) -> Result<SocketAddr> {
         self.set_and_post_server_state(ServerState::Preparing);
 
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(worker_threads)
-            .build()
-            .unwrap()
-            .block_on(async {
-                self.bind().await.ok();
-                self.serve().await;
-            });
+        self.setup_proxy_rules_manager()?;
 
-        self.set_and_post_server_state(ServerState::Terminated);
-
-        Ok(())
-    }
-
-    pub async fn bind(&mut self) -> Result<SocketAddr> {
         let tcp_listener = TcpListener::bind(self.config.addr).await.map_err(|e| {
             error!(
                 "failed to bind proxy server on address: {}",
