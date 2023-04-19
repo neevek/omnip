@@ -11,25 +11,32 @@ fn main() {
 
     let (server_type, layered_server_type, orig_server_addr) =
         parse_server_addr(args.addr.as_str());
-    if !args.addr.is_empty() && server_type.is_none() {
-        error!("invalid server address: {}", args.addr);
-        return;
-    }
+
+    let orig_server_addr = match match orig_server_addr {
+        Some(ref server_addr) => server_addr.to_socket_addr(),
+        None => None,
+    } {
+        Some(server_addr) => server_addr,
+        None => {
+            error!("server addr must be an IP address: {:?}", args.addr);
+            return;
+        }
+    };
 
     let (downstream_type, layered_downstream_type, downstream_addr) =
         parse_server_addr(args.downstream.as_str());
     if !args.downstream.is_empty() && downstream_type.is_none() {
+        error!("invalid downstream address: {}", args.downstream);
         return;
     }
 
-    let server_addr = orig_server_addr.unwrap();
     let (server_type, server_addr) = match layered_server_type {
         // use random port for the proxy server, the specified port will be used for the tunnel server
         Some(ref layered_type) => (
             layered_type.get_basic_type(),
             local_ipv4_socket_addr_with_unspecified_port(),
         ),
-        None => (server_type.unwrap(), server_addr),
+        None => (server_type.unwrap(), orig_server_addr),
     };
 
     if layered_server_type.is_some() && layered_downstream_type.is_some() {
@@ -58,10 +65,7 @@ fn main() {
             let mut quic_client = None;
             if require_quic_client {
                 let quic_client_config = QuicClientConfig {
-                    server_addr: match downstream_addr {
-                        Some(socket_addr) => socket_addr.to_string(),
-                        None => args.downstream, // it maybe a domain name, delay domain resolution to rstun
-                    },
+                    server_addr: downstream_addr.as_ref().unwrap().to_string(),
                     local_access_server_addr: local_ipv4_socket_addr_with_unspecified_port(),
                     cert: args.cert.clone(),
                     key: args.key.clone(),
@@ -81,7 +85,7 @@ fn main() {
                 downstream_addr: match quic_client {
                     // use access server of the tunnel client as downstream if it exists to build proxy chain
                     Some(ref qc) => qc.access_server_addr(),
-                    _ => downstream_addr,
+                    _ => downstream_addr.unwrap().to_socket_addr(),
                 },
                 proxy_rules_file: args.proxy_rules_file,
                 threads: args.threads,
@@ -110,7 +114,7 @@ fn main() {
 
                 if require_quic_server {
                     let quic_server_config = QuicServerConfig {
-                        server_addr: orig_server_addr.unwrap(),
+                        server_addr: orig_server_addr,
                         downstream_addr: proxy_addr,
                         cert: args.cert,
                         key: args.key,

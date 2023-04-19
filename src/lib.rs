@@ -10,13 +10,14 @@ mod utils;
 use anyhow::Result;
 use byte_pool::{Block, BytePool};
 use lazy_static::lazy_static;
-use log::error;
+use log::{error, warn};
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use quic::quic_client::QuicClient;
 pub use quic::quic_server::QuicServer;
 pub use server::Server;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use url::Url;
 
 const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
     [".home", ".lan", ".corp", ".intranet", ".private"];
@@ -107,6 +108,16 @@ impl NetAddr {
                 .any(|suffix| domain.ends_with(suffix))
         } else {
             false
+        }
+    }
+
+    pub fn to_socket_addr(&self) -> Option<SocketAddr> {
+        match self.host {
+            Host::IP(ip) => Some(SocketAddr::new(ip, self.port)),
+            _ => {
+                warn!("{} is not an IP address", self);
+                None
+            }
         }
     }
 }
@@ -203,52 +214,59 @@ pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {
 }
 
 #[rustfmt::skip]
-pub fn parse_server_addr(addr: &str) -> (Option<ServerType>, Option<LayeredServerType>, Option<SocketAddr>) {
+pub fn parse_server_addr(
+    addr: &str,
+) -> (
+    Option<ServerType>,
+    Option<LayeredServerType>,
+    Option<NetAddr>,
+) {
     let supported_protocols: &[(ServerType, Option<LayeredServerType>, &str)] = &[
-        (ServerType::Http, None, "http://"),
-        (ServerType::Socks5, None, "socks5://"),
-        (ServerType::Socks4, None, "socks4://"),
-        (ServerType::Http, Some(LayeredServerType::HttpOverQuic), "http+quic://"),
-        (ServerType::Socks5, Some(LayeredServerType::Socks5OverQuic), "socks5+quic://"),
-        (ServerType::Socks4, Some(LayeredServerType::Socks4OverQuic), "socks4+quic://"),
+        (ServerType::Http, None, "http"),
+        (ServerType::Socks5, None, "socks5"),
+        (ServerType::Socks4, None, "socks4"),
+        (ServerType::Http, Some(LayeredServerType::HttpOverQuic), "http+quic"),
+        (ServerType::Socks5, Some(LayeredServerType::Socks5OverQuic), "socks5+quic"),
+        (ServerType::Socks4, Some(LayeredServerType::Socks4OverQuic), "socks4+quic"),
     ];
+
+    let addr = if addr.find("://").is_some() {
+        addr.to_string()
+    } else {
+        if addr.rfind("]").is_none() && addr.find(":").is_none() {
+            format!("http://127.0.0.1:{}", addr)
+        } else {
+            // default to Http
+            format!("http://{}", addr)
+        }
+    };
+
+    let url = match Url::parse(addr.as_str()) {
+        Ok(url) => url,
+        _ => {
+            error!("invalid server protocol, address: {}", addr);
+            return (None, None, None);
+        }
+    };
 
     let mut server_type = None;
     let mut layered_type = None;
     supported_protocols.iter().for_each(|v| {
-        if addr.starts_with(v.2) {
+        if url.scheme() == v.2 {
             server_type = Some(v.0.clone());
             layered_type = v.1.clone();
         }
     });
 
-    if server_type == None {
-        if addr.find("://").is_some() {
-            error!("invalid server protocol, address: {}", addr);
-            return (None, None, None);
+    match server_type {
+        Some(server_type) => {
+            (Some(server_type), layered_type,
+                Some(NetAddr::new(
+                    url.host().unwrap().to_string().as_str(),
+                    url.port_or_known_default().unwrap(),
+                )),
+            )
         }
-        // default to Http
-        server_type = Some(ServerType::Http);
-    }
-
-    let start_index = addr.find("://").map_or_else(|| 0, |index| index + 3);
-    let mut addr = addr[start_index..].trim_end_matches("/").to_string();
-
-    let mut start_pos = 0;
-    if let Some(ipv6_end_bracket_pos) = addr.find(']') {
-        start_pos = ipv6_end_bracket_pos + 1;
-    }
-    if addr[start_pos..].find(':').is_none() {
-        addr = format!("127.0.0.1:{}", addr);
-    }
-
-    if let Ok(addr) = addr.parse() {
-        return (server_type, layered_type, Some(addr));
-    }
-
-    match layered_type {
-        // address may be a domain name, but domain name is allowed only for layered_server_type
-        Some(_) => (server_type, layered_type, None),
         None => (None, None, None)
     }
 }
