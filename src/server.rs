@@ -3,7 +3,10 @@ use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
 use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, TrafficData};
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
-use crate::{utils, Config, Host, ProxyError, ProxyRuleManager, ServerType};
+use crate::{
+    utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError, ProxyRuleManager,
+    QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
 use log::{debug, error, info};
@@ -82,6 +85,72 @@ impl Server {
         self.scheduled_start = true;
     }
 
+    pub fn run(mut config: Config, common_quic_config: CommonQuicConfig) -> Result<()> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(config.threads)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let require_quic_server = config.is_layered_proto;
+                let require_quic_client = config.is_downstream_layered_proto;
+
+                let mut quic_client = None;
+                if require_quic_client {
+                    let quic_client_config = QuicClientConfig {
+                        server_addr: NetAddr::from_socket_addr(config.downstream_addr.unwrap()),
+                        local_access_server_addr:
+                            crate::local_ipv4_socket_addr_with_unspecified_port(),
+                        common_cfg: common_quic_config.clone(),
+                    };
+
+                    let mut client = QuicClient::new(quic_client_config);
+                    client.start_access_server().await?;
+                    config.downstream_addr = client.access_server_addr();
+                    quic_client = Some(client);
+                }
+
+                let orig_server_addr = config.addr;
+                if require_quic_server {
+                    config.addr = crate::local_ipv4_socket_addr_with_unspecified_port();
+                }
+
+                let mut proxy_server = Server::new(config);
+                #[cfg(target_os = "android")]
+                {
+                    proxy_server.set_enable_on_info_report(true);
+                    proxy_server.set_on_info_listener(|data: &str| {
+                        log::info!("Server Info: {}", data);
+                    });
+                }
+
+                let proxy_addr = proxy_server.bind().await?;
+
+                if require_quic_server || require_quic_client {
+                    proxy_server.serve_async().await;
+
+                    if let Some(mut qc) = quic_client {
+                        qc.connect_and_serve().await;
+                    }
+
+                    if require_quic_server {
+                        let quic_server_config = QuicServerConfig {
+                            server_addr: orig_server_addr,
+                            downstream_addr: proxy_addr,
+                            common_cfg: common_quic_config.clone(),
+                        };
+                        let mut quic_server = QuicServer::new(quic_server_config);
+                        quic_server.bind().await?;
+                        quic_server.serve().await;
+                    }
+                } else {
+                    proxy_server.serve().await;
+                }
+
+                Ok::<(), anyhow::Error>(())
+            })
+    }
+
     pub async fn bind(&mut self) -> Result<SocketAddr> {
         self.set_and_post_server_state(ServerState::Preparing);
 
@@ -95,10 +164,12 @@ impl Server {
             e
         })?;
         let socket_addr = tcp_listener.local_addr().unwrap();
+        info!("==========================================================");
         info!(
-            "proxy server is bound on address: {}, type: {}",
+            "proxy server bound to: {}, type: {}",
             socket_addr, self.config.server_type
         );
+        info!("==========================================================");
         self.tcp_listener = Some(tcp_listener);
 
         Ok(socket_addr)
@@ -161,13 +232,13 @@ impl Server {
             self.config.server_type
         );
 
+        let downstream_addr = self.config.downstream_addr;
         loop {
             match listener.accept().await {
                 Ok((inbound_stream, _addr)) => {
                     let resolver = self.resolver.as_ref().unwrap().clone();
                     let system_resolver = self.system_resolver.as_ref().unwrap().clone();
                     let downstream_type = self.config.downstream_type.clone();
-                    let downstream_addr = self.config.downstream_addr.clone();
                     let proxy_rule_manager = self.proxy_rule_manager.clone();
                     let traffic_data_sender = traffic_data_sender.clone();
                     let handler = self.create_proxy_handler();
@@ -203,11 +274,11 @@ impl Server {
 
     fn create_proxy_handler(&self) -> Box<dyn ProxyHandler + Send + Sync> {
         match self.config.server_type {
-            ServerType::Http => Box::new(HttpProxyHandler::new()),
-            ServerType::Socks5 => {
+            ProtoType::Http => Box::new(HttpProxyHandler::new()),
+            ProtoType::Socks5 => {
                 Box::new(SocksProxyHandler::new(SocksVersion::V5, self.config.addr))
             }
-            ServerType::Socks4 => {
+            ProtoType::Socks4 => {
                 Box::new(SocksProxyHandler::new(SocksVersion::V4, self.config.addr))
             }
         }
@@ -226,7 +297,7 @@ impl Server {
         system_resolver: Arc<DNSResolver>,
         mut proxy_handler: Box<dyn ProxyHandler + Send + Sync>,
         mut inbound_stream: TcpStream,
-        downstream_type: Option<ServerType>,
+        downstream_type: Option<ProtoType>,
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
         traffic_data_sender: Sender<TrafficData>,
@@ -264,9 +335,9 @@ impl Server {
                     || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
                 {
                     outbound_type = match downstream_type.unwrap() {
-                        ServerType::Http => OutboundType::HttpProxy,
-                        ServerType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
-                        ServerType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
+                        ProtoType::Http => OutboundType::HttpProxy,
+                        ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
+                        ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
                     };
 
                     debug!(

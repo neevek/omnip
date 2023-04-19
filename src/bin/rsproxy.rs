@@ -1,137 +1,33 @@
+use anyhow::Result;
 use clap::Parser;
-use log::error;
 use rsproxy::*;
 
 extern crate pretty_env_logger;
 
-fn main() {
+fn main() -> Result<()> {
     let args = RsproxyArgs::parse();
 
     rs_utilities::LogHelper::init_logger("rsp", &args.loglevel);
 
-    let (server_type, layered_server_type, orig_server_addr) =
-        parse_server_addr(args.addr.as_str());
+    let config = create_config(
+        args.addr,
+        args.downstream,
+        args.dot_server,
+        args.name_servers,
+        args.proxy_rules_file,
+        args.threads,
+        args.watch_proxy_rules_change,
+    )?;
 
-    let orig_server_addr = match match orig_server_addr {
-        Some(ref server_addr) => server_addr.to_socket_addr(),
-        None => None,
-    } {
-        Some(server_addr) => server_addr,
-        None => {
-            error!("server addr must be an IP address: {:?}", args.addr);
-            return;
-        }
+    let common_quic_config = CommonQuicConfig {
+        cert: args.cert,
+        key: args.key,
+        password: args.password,
+        cipher: args.cipher,
+        max_idle_timeout_ms: args.max_idle_timeout_ms,
     };
 
-    let (downstream_type, layered_downstream_type, downstream_addr) =
-        parse_server_addr(args.downstream.as_str());
-    if !args.downstream.is_empty() && downstream_type.is_none() {
-        error!("invalid downstream address: {}", args.downstream);
-        return;
-    }
-
-    let (server_type, server_addr) = match layered_server_type {
-        // use random port for the proxy server, the specified port will be used for the tunnel server
-        Some(ref layered_type) => (
-            layered_type.get_basic_type(),
-            local_ipv4_socket_addr_with_unspecified_port(),
-        ),
-        None => (server_type.unwrap(), orig_server_addr),
-    };
-
-    if layered_server_type.is_some() && layered_downstream_type.is_some() {
-        error!(
-            "QUIC server and QUIC downstream cannot be chained: {} -> {:?}",
-            server_addr, downstream_addr
-        );
-        return;
-    }
-
-    let worker_threads = if args.threads > 0 {
-        args.threads
-    } else {
-        num_cpus::get()
-    };
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(worker_threads)
-        .build()
-        .unwrap()
-        .block_on(async {
-            let require_quic_server = layered_server_type.is_some();
-            let require_quic_client = layered_downstream_type.is_some();
-
-            let mut quic_client = None;
-            if require_quic_client {
-                let quic_client_config = QuicClientConfig {
-                    server_addr: downstream_addr.as_ref().unwrap().to_string(),
-                    local_access_server_addr: local_ipv4_socket_addr_with_unspecified_port(),
-                    cert: args.cert.clone(),
-                    key: args.key.clone(),
-                    password: args.password.clone(),
-                    cipher: args.cipher,
-                    max_idle_timeout_ms: args.max_idle_timeout_ms,
-                };
-                let mut client = QuicClient::new(quic_client_config);
-                client.start_access_server().await?;
-                quic_client = Some(client);
-            }
-
-            let config = Config {
-                server_type,
-                addr: server_addr,
-                downstream_type,
-                downstream_addr: match quic_client {
-                    // use access server of the tunnel client as downstream if it exists to build proxy chain
-                    Some(ref qc) => qc.access_server_addr(),
-                    _ => downstream_addr.unwrap().to_socket_addr(),
-                },
-                proxy_rules_file: args.proxy_rules_file,
-                threads: args.threads,
-                dot_server: args.dot_server,
-                name_servers: args.name_servers,
-                watch_proxy_rules_change: args.watch_proxy_rules_change,
-            };
-
-            let mut proxy_server = Server::new(config);
-            #[cfg(target_os = "android")]
-            {
-                proxy_server.set_enable_on_info_report(true);
-                proxy_server.set_on_info_listener(|data: &str| {
-                    log::info!("Server Info: {}", data);
-                });
-            }
-
-            let proxy_addr = proxy_server.bind().await?;
-
-            if require_quic_server || require_quic_client {
-                proxy_server.serve_async().await;
-
-                if let Some(mut qc) = quic_client {
-                    qc.connect_and_serve().await;
-                }
-
-                if require_quic_server {
-                    let quic_server_config = QuicServerConfig {
-                        server_addr: orig_server_addr,
-                        downstream_addr: proxy_addr,
-                        cert: args.cert,
-                        key: args.key,
-                        password: args.password,
-                        max_idle_timeout_ms: args.max_idle_timeout_ms,
-                    };
-                    let mut quic_server = QuicServer::new(quic_server_config);
-                    quic_server.bind().await?;
-                    quic_server.serve().await;
-                }
-            } else {
-                proxy_server.serve().await;
-            }
-
-            Ok::<(), anyhow::Error>(())
-        })
-        .ok();
+    Server::run(config, common_quic_config)
 }
 
 #[derive(Parser, Debug)]
@@ -196,7 +92,3 @@ struct RsproxyArgs {
     #[clap(short = 'l', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 13)]
     loglevel: String,
 }
-
-// impl RsproxyArgs {
-//     fn check_args(&self) {}
-// }

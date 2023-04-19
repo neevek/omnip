@@ -125,14 +125,13 @@ impl ProxyHandler for SocksProxyHandler {
 
                 if &data[4..8] == "\x00\x00\x00\x01".as_bytes() {
                     self.target_addr = Some(match Self::parse_socks4a_domain(data) {
-                        Some(domain) => NetAddr::new_width_domain(
-                            domain,
-                            (data[2] as u16) << 8 | data[3] as u16,
-                        ),
+                        Some(domain) => {
+                            NetAddr::from_domain(domain, (data[2] as u16) << 8 | data[3] as u16)
+                        }
                         None => return self.fail_with_resp(),
                     });
                 } else {
-                    self.target_addr = Some(NetAddr::new_with_ip(
+                    self.target_addr = Some(NetAddr::from_ip(
                         IpAddr::V4(Ipv4Addr::new(data[4], data[5], data[6], data[7])),
                         (data[2] as u16) << 8 | data[3] as u16,
                     ));
@@ -157,7 +156,7 @@ impl ProxyHandler for SocksProxyHandler {
                 1u8 => {
                     // <4-byte header> + <4-byte IP> + <2-byte port>
                     if data_len == 4 + 4 + 2 {
-                        Some(NetAddr::new_with_ip(
+                        Some(NetAddr::from_ip(
                             IpAddr::V4(Ipv4Addr::new(data[4], data[5], data[6], data[7])),
                             (data[8] as u16) << 8 | data[9] as u16,
                         ))
@@ -190,7 +189,7 @@ impl ProxyHandler for SocksProxyHandler {
                     // // ipv6
                     // // <4-byte header> + <16-byte IP> + <2-byte port>
                     if data_len == 4 + 16 + 2 {
-                        Some(NetAddr::new_with_ip(
+                        Some(NetAddr::from_ip(
                             IpAddr::V6(Ipv6Addr::new(
                                 (data[4] as u16) << 8 | data[5] as u16,
                                 (data[6] as u16) << 8 | data[7] as u16,

@@ -12,16 +12,16 @@ impl QuicClient {
     pub fn new(quic_client_config: QuicClientConfig) -> Self {
         let mut config = rstun::ClientConfig::default();
         config.server_addr = quic_client_config.server_addr.to_string();
-        config.cert_path = quic_client_config.cert;
-        config.cipher = quic_client_config.cipher;
-        config.max_idle_timeout_ms = quic_client_config.max_idle_timeout_ms;
+        config.cert_path = quic_client_config.common_cfg.cert;
+        config.cipher = quic_client_config.common_cfg.cipher;
+        config.max_idle_timeout_ms = quic_client_config.common_cfg.max_idle_timeout_ms;
         config.keep_alive_interval_ms = config.max_idle_timeout_ms / 2;
         config.connect_max_retry = 0;
         config.wait_before_retry_ms = 5000;
         config.mode = rstun::TUNNEL_MODE_OUT;
         config.local_access_server_addr = Some(quic_client_config.local_access_server_addr);
         config.login_msg = Some(rstun::TunnelMessage::ReqOutLogin(rstun::LoginInfo {
-            password: quic_client_config.password,
+            password: quic_client_config.common_cfg.password,
             access_server_addr: None,
         }));
 
