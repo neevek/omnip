@@ -94,14 +94,6 @@ impl Server {
             inner_state: ThreadSafeState::new(),
         });
 
-        #[cfg(target_os = "android")]
-        {
-            server.set_enable_on_info_report(true);
-            server.set_on_info_listener(|data: &str| {
-                log::info!("Server Info: {}", data);
-            });
-        }
-
         server
     }
 

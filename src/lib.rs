@@ -393,13 +393,6 @@ pub mod android {
             return 0;
         }
 
-        let str_addr = get_string(&env, &jaddr);
-        let addr = parse_socket_addr(&str_addr);
-        if addr.is_none() {
-            error!("invalid address: {}", &str_addr);
-            return 0;
-        }
-
         let addr = get_string(&env, &jaddr);
         let downstream = get_string(&env, &jdownstream);
         let dot_server = get_string(&env, &jdotServer);

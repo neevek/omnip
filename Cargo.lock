@@ -1123,7 +1123,7 @@ dependencies = [
 [[package]]
 name = "rstun"
 version = "0.4.1"
-source = "git+https://github.com/neevek/rstun#ba35f1251a9ec6adf0711556a9990be7446953b7"
+source = "git+https://github.com/neevek/rstun#77d559af5b802e4bf5ea12d96abb946c71e32ff8"
 dependencies = [
  "android_logger 0.11.1",
  "anyhow",
