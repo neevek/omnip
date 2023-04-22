@@ -3,17 +3,17 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub(crate) struct TrafficData {
+pub(crate) struct ProxyTraffic {
     pub rx_bytes: u64,
     pub tx_bytes: u64,
 }
 
 #[derive(Serialize)]
 pub(crate) enum ServerInfoType {
-    DNSResolverType,
-    ServerState,
-    Traffic,
-    Message,
+    ProxyDNSResolverType,
+    ProxyServerState,
+    ProxyTraffic,
+    ProxyMessage,
 }
 
 #[derive(Serialize)]

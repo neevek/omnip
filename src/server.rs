@@ -1,6 +1,6 @@
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
-use crate::server_info_bridge::{ServerInfo, ServerInfoBridge, ServerInfoType, TrafficData};
+use crate::server_info_bridge::{ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType};
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
 use crate::{
@@ -94,7 +94,7 @@ impl Server {
             inner_state: ThreadSafeState::new(),
         });
 
-        // #[cfg(target_os = "android")]
+        #[cfg(target_os = "android")]
         {
             server.set_enable_on_info_report(true);
             server.set_on_info_listener(|data: &str| {
@@ -144,10 +144,10 @@ impl Server {
                     proxy_downstream_addr = client.access_server_addr();
                     quic_client = Some(client);
 
-                    // #[cfg(target_os = "android")]
+                    #[cfg(target_os = "android")]
                     {
                         self.post_server_info(ServerInfo::new(
-                            ServerInfoType::Message,
+                            ServerInfoType::ProxyMessage,
                             Box::new(format!(
                                 "Tunnel access server bound to: {}",
                                 proxy_downstream_addr.unwrap()
@@ -209,7 +209,7 @@ impl Server {
         info!("==========================================================");
 
         self.post_server_info(ServerInfo::new(
-            ServerInfoType::Message,
+            ServerInfoType::ProxyMessage,
             Box::new(format!(
                 "Proxy server bound to: {}, type: {}",
                 proxy_addr, self.config.server_type
@@ -259,14 +259,14 @@ impl Server {
         };
 
         self.post_server_info(ServerInfo::new(
-            ServerInfoType::DNSResolverType,
+            ServerInfoType::ProxyDNSResolverType,
             Box::new(resolver.resolver_type().to_string()),
         ));
 
         self.set_and_post_server_state(ServerState::Running);
 
         let (traffic_data_sender, traffic_data_receiver) =
-            channel::<TrafficData>(TRAFFIC_DATA_QUEUE_SIZE);
+            channel::<ProxyTraffic>(TRAFFIC_DATA_QUEUE_SIZE);
         self.collect_and_report_traffic_data(traffic_data_receiver);
 
         info!(
@@ -342,7 +342,7 @@ impl Server {
         downstream_type: Option<ProtoType>,
         downstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-        traffic_data_sender: Sender<TrafficData>,
+        traffic_data_sender: Sender<ProxyTraffic>,
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
@@ -495,8 +495,8 @@ impl Server {
     async fn start_stream_transfer(
         a_stream: &mut TcpStream,
         b_stream: &mut TcpStream,
-        traffic_data_sender: &Sender<TrafficData>,
-    ) -> Result<TrafficData, ProxyError> {
+        traffic_data_sender: &Sender<ProxyTraffic>,
+    ) -> Result<ProxyTraffic, ProxyError> {
         let (tx_bytes, rx_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
             .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
             .await?;
@@ -510,21 +510,21 @@ impl Server {
         );
 
         traffic_data_sender
-            .send(TrafficData { tx_bytes, rx_bytes })
+            .send(ProxyTraffic { tx_bytes, rx_bytes })
             .await
             .ok();
 
-        Ok(TrafficData { rx_bytes, tx_bytes })
+        Ok(ProxyTraffic { rx_bytes, tx_bytes })
     }
 
-    fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<TrafficData>) {
+    fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<ProxyTraffic>) {
         let inner_state = self.inner_state.clone();
         tokio::spawn(async move {
             let mut total_rx_bytes = 0;
             let mut total_tx_bytes = 0;
             let mut last_elapsed_time = 0;
             let start_time = SystemTime::now();
-            while let Some(TrafficData { rx_bytes, tx_bytes }) = traffic_data_receiver.recv().await
+            while let Some(ProxyTraffic { rx_bytes, tx_bytes }) = traffic_data_receiver.recv().await
             {
                 total_rx_bytes += rx_bytes;
                 total_tx_bytes += tx_bytes;
@@ -539,8 +539,8 @@ impl Server {
                             .unwrap()
                             .server_info_bridge
                             .post_server_info(&ServerInfo::new(
-                                ServerInfoType::Traffic,
-                                Box::new(TrafficData {
+                                ServerInfoType::ProxyTraffic,
+                                Box::new(ProxyTraffic {
                                     rx_bytes: total_rx_bytes,
                                     tx_bytes: total_tx_bytes,
                                 }),
@@ -636,7 +636,7 @@ impl Server {
         info!("client state: {}", state);
         inner_state!(self, state) = state.clone();
         self.post_server_info(ServerInfo::new(
-            ServerInfoType::ServerState,
+            ServerInfoType::ProxyServerState,
             Box::new(state.to_string()),
         ));
     }
