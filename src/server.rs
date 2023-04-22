@@ -88,11 +88,21 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config, common_quic_config: CommonQuicConfig) -> Arc<Self> {
-        Arc::new(Server {
+        let server = Arc::new(Server {
             config,
             common_quic_config,
             inner_state: ThreadSafeState::new(),
-        })
+        });
+
+        // #[cfg(target_os = "android")]
+        {
+            server.set_enable_on_info_report(true);
+            server.set_on_info_listener(|data: &str| {
+                log::info!("Server Info: {}", data);
+            });
+        }
+
+        server
     }
 
     pub fn set_scheduled_start(self: &Arc<Self>) {
@@ -106,13 +116,7 @@ impl Server {
             .build()
             .unwrap()
             .block_on(async {
-                #[cfg(target_os = "android")]
-                {
-                    proxy_server.set_enable_on_info_report(true);
-                    proxy_server.set_on_info_listener(|data: &str| {
-                        log::info!("Server Info: {}", data);
-                    });
-                }
+                self.set_and_post_server_state(ServerState::Preparing);
 
                 let require_quic_server = self.config.is_layered_proto;
                 let require_quic_client = self.config.is_downstream_layered_proto;
@@ -128,10 +132,28 @@ impl Server {
                     };
 
                     let mut client = QuicClient::new(quic_client_config);
+                    let proxy_server = self.clone();
+
+                    client.set_enable_on_info_report(true);
+                    client.set_on_info_listener(move |data: &str| {
+                        proxy_server.post_server_log(data);
+                    });
+
                     client.start_access_server().await?;
                     // make QUIC tunnel as the downstream of the proxy_server
                     proxy_downstream_addr = client.access_server_addr();
                     quic_client = Some(client);
+
+                    // #[cfg(target_os = "android")]
+                    {
+                        self.post_server_info(ServerInfo::new(
+                            ServerInfoType::Message,
+                            Box::new(format!(
+                                "Tunnel access server bound to: {}",
+                                proxy_downstream_addr.unwrap()
+                            )),
+                        ));
+                    }
                 }
 
                 let orig_server_addr = self.config.addr;
@@ -142,14 +164,7 @@ impl Server {
                 };
 
                 let proxy_listener = self.bind(proxy_server_addr).await?;
-
                 let proxy_addr = proxy_listener.local_addr().unwrap();
-                info!("==========================================================");
-                info!(
-                    "proxy server bound to: {}, type: {}",
-                    proxy_addr, self.config.server_type
-                );
-                info!("==========================================================");
 
                 if require_quic_server || require_quic_client {
                     self.serve_async(proxy_listener, proxy_downstream_addr)
@@ -178,13 +193,30 @@ impl Server {
     }
 
     async fn bind(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
-        self.set_and_post_server_state(ServerState::Preparing);
         self.setup_proxy_rules_manager()?;
 
-        Ok(TcpListener::bind(addr).await.map_err(|e| {
+        let listener = TcpListener::bind(addr).await.map_err(|e| {
             error!("failed to bind proxy server on address: {}", addr);
             e
-        })?)
+        })?;
+
+        let proxy_addr = listener.local_addr().unwrap();
+        info!("==========================================================");
+        info!(
+            "proxy server bound to: {}, type: {}",
+            proxy_addr, self.config.server_type
+        );
+        info!("==========================================================");
+
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::Message,
+            Box::new(format!(
+                "Proxy server bound to: {}, type: {}",
+                proxy_addr, self.config.server_type
+            )),
+        ));
+
+        Ok(listener)
     }
 
     async fn serve_async(
@@ -615,6 +647,12 @@ impl Server {
     {
         if inner_state!(self, on_info_report_enabled) {
             inner_state!(self, server_info_bridge).post_server_info(&server_info);
+        }
+    }
+
+    fn post_server_log(self: &Arc<Self>, message: &str) {
+        if inner_state!(self, on_info_report_enabled) {
+            inner_state!(self, server_info_bridge).post_server_log(message)
         }
     }
 

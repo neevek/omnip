@@ -40,6 +40,14 @@ impl QuicClient {
         self.client.connect_and_serve().await;
     }
 
+    pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static + Send + Sync) {
+        self.client.set_on_info_listener(callback);
+    }
+
+    pub fn set_enable_on_info_report(&mut self, enable: bool) {
+        self.client.set_enable_on_info_report(enable);
+    }
+
     pub fn access_server_addr(&self) -> Option<SocketAddr> {
         self.access_server_addr
     }

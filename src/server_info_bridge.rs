@@ -13,6 +13,7 @@ pub(crate) enum ServerInfoType {
     DNSResolverType,
     ServerState,
     Traffic,
+    Message,
 }
 
 #[derive(Serialize)]
@@ -59,6 +60,12 @@ impl ServerInfoBridge {
             if let Ok(json) = serde_json::to_string(data) {
                 listener.lock().unwrap()(json.as_str());
             }
+        }
+    }
+
+    pub(crate) fn post_server_log(&self, message: &str) {
+        if let Some(ref listener) = self.listener {
+            listener.lock().unwrap()(message);
         }
     }
 }

@@ -353,18 +353,12 @@ pub mod android {
     use jni::sys::{jlong, jstring};
 
     use self::jni::objects::{JClass, JString};
-    use self::jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6};
-    use self::jni::{JNIEnv, JavaVM};
+    use self::jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
+    use self::jni::JNIEnv;
     use super::*;
     use log::error;
-    use std::os::raw::c_void;
+    use std::sync::Arc;
     use std::thread;
-
-    #[no_mangle]
-    pub extern "system" fn JNI_OnLoad(vm: JavaVM, _: *mut c_void) -> jint {
-        let _env = vm.get_env().expect("failed to get JNIEnv");
-        JNI_VERSION_1_6
-    }
 
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeInitLogger(
@@ -385,11 +379,12 @@ pub mod android {
         _: JClass,
         jaddr: JString,
         jdownstream: JString,
-        jproxyRulesFile: JString,
         jdotServer: JString,
         jnameServers: JString,
+        jproxyRulesFile: JString,
         jcert: JString,
         jkey: JString,
+        jcipher: JString,
         jpassword: JString,
         jmaxIdleTimeoutMs: jint,
         jthreads: jint,
@@ -405,22 +400,41 @@ pub mod android {
             return 0;
         }
 
+        let addr = get_string(&env, &jaddr);
         let downstream = get_string(&env, &jdownstream);
+        let dot_server = get_string(&env, &jdotServer);
+        let name_servers = get_string(&env, &jnameServers);
         let proxy_rules_file = get_string(&env, &jproxyRulesFile);
-        let dotServer = get_string(&env, &jdotServer);
-        let nameServers = get_string(&env, &jnameServers);
+        let cert = get_string(&env, &jcert);
+        let key = get_string(&env, &jkey);
+        let cipher = get_string(&env, &jcipher);
+        let password = get_string(&env, &jpassword);
 
-        // let config = Config {
-        //     addr: addr.unwrap(),
-        //     downstream_addr: parse_socket_addr(downstream.as_str()),
-        //     proxy_rules_file,
-        //     threads: jthreads as usize,
-        //     dot_server: dotServer,
-        //     name_servers: nameServers,
-        //     watch_proxy_rules_change: false,
-        // };
+        let config = match create_config(
+            addr,
+            downstream,
+            dot_server,
+            name_servers,
+            proxy_rules_file,
+            jthreads as usize,
+            false,
+        ) {
+            Ok(config) => config,
+            Err(e) => {
+                error!("failed to create config: {}", e);
+                return 0;
+            }
+        };
 
-        // Box::into_raw(Box::new(Server::new(config))) as jlong
+        let common_quic_config = CommonQuicConfig {
+            cert,
+            key,
+            password,
+            cipher,
+            max_idle_timeout_ms: jmaxIdleTimeoutMs as u64,
+        };
+
+        Box::into_raw(Box::new(Server::new(config, common_quic_config))) as jlong
     }
 
     #[no_mangle]
@@ -433,15 +447,15 @@ pub mod android {
             return;
         }
 
-        let server = &mut *(server_ptr as *mut Server);
+        let server = &mut *(server_ptr as *mut Arc<Server>);
         if server.has_scheduled_start() {
             return;
         }
 
         server.set_scheduled_start();
         thread::spawn(move || {
-            let server = &mut *(server_ptr as *mut Server);
-            server.start_and_block().ok();
+            let server = &mut *(server_ptr as *mut Arc<Server>);
+            server.run().ok();
         });
     }
 
@@ -455,7 +469,7 @@ pub mod android {
             return env.new_string("").unwrap().into_inner();
         }
 
-        let server = &mut *(server_ptr as *mut Server);
+        let server = &mut *(server_ptr as *mut Arc<Server>);
         env.new_string(server.get_state().to_string())
             .unwrap()
             .into_inner()
@@ -468,7 +482,7 @@ pub mod android {
         server_ptr: jlong,
     ) {
         if server_ptr != 0 {
-            let _boxed_server = Box::from_raw(server_ptr as *mut Server);
+            let _boxed_server = Box::from_raw(server_ptr as *mut Arc<Server>);
         }
     }
 
@@ -483,7 +497,7 @@ pub mod android {
             return;
         }
 
-        let server = &mut *(server_ptr as *mut Server);
+        let server = &mut *(server_ptr as *mut Arc<Server>);
         let bool_enable = enable == 1;
         if bool_enable && !server.has_on_info_listener() {
             let jvm = env.get_java_vm().unwrap();
