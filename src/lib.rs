@@ -169,9 +169,9 @@ pub struct Config {
     pub server_type: ProtoType,
     pub addr: SocketAddr,
     pub is_layered_proto: bool,
-    pub downstream_type: Option<ProtoType>,
-    pub downstream_addr: Option<NetAddr>,
-    pub is_downstream_layered_proto: bool,
+    pub upstream_type: Option<ProtoType>,
+    pub upstream_addr: Option<NetAddr>,
+    pub is_upstream_layered_proto: bool,
     pub proxy_rules_file: String,
     pub threads: usize,
     pub dot_server: String,
@@ -182,7 +182,7 @@ pub struct Config {
 #[derive(Debug)]
 pub struct QuicServerConfig {
     pub server_addr: SocketAddr,
-    pub downstream_addr: SocketAddr,
+    pub upstream_addr: SocketAddr,
     pub common_cfg: CommonQuicConfig,
 }
 
@@ -283,7 +283,7 @@ pub fn parse_server_addr(
 
 pub fn create_config(
     addr: String,
-    downstream: String,
+    upstream: String,
     dot_server: String,
     name_servers: String,
     proxy_rules_file: String,
@@ -302,21 +302,21 @@ pub fn create_config(
         }
     };
 
-    let (downstream_type, downstream_addr, is_downstream_layered_proto) =
-        parse_server_addr(downstream.as_str());
-    if !downstream.is_empty() && downstream_type.is_none() {
-        log_and_bail!("invalid downstream address: {}", downstream);
+    let (upstream_type, upstream_addr, is_upstream_layered_proto) =
+        parse_server_addr(upstream.as_str());
+    if !upstream.is_empty() && upstream_type.is_none() {
+        log_and_bail!("invalid upstream address: {}", upstream);
     }
 
-    if is_layered_proto && is_downstream_layered_proto {
+    if is_layered_proto && is_upstream_layered_proto {
         log_and_bail!(
-            "QUIC server and QUIC downstream cannot be chained: {} -> {:?}",
+            "QUIC server and QUIC upstream cannot be chained: {} -> {:?}",
             server_addr,
-            downstream_addr
+            upstream_addr
         );
-    } else if let Some(ref downstream) = downstream_addr {
-        if downstream.is_domain() && !is_downstream_layered_proto {
-            log_and_bail!("only IP address is allowed for downstream with non-layered protocols, invalid downstream: {}", downstream);
+    } else if let Some(ref upstream) = upstream_addr {
+        if upstream.is_domain() && !is_upstream_layered_proto {
+            log_and_bail!("only IP address is allowed for upstream with non-layered protocols, invalid upstream: {}", upstream);
         }
     }
 
@@ -330,9 +330,9 @@ pub fn create_config(
         server_type: server_type.unwrap(),
         addr: server_addr,
         is_layered_proto,
-        downstream_type,
-        downstream_addr,
-        is_downstream_layered_proto,
+        upstream_type,
+        upstream_addr,
+        is_upstream_layered_proto,
         proxy_rules_file,
         threads: worker_threads,
         dot_server,
@@ -374,7 +374,7 @@ pub mod android {
         env: JNIEnv,
         _: JClass,
         jaddr: JString,
-        jdownstream: JString,
+        jupstream: JString,
         jdotServer: JString,
         jnameServers: JString,
         jproxyRulesFile: JString,
@@ -390,7 +390,7 @@ pub mod android {
         }
 
         let addr = get_string(&env, &jaddr);
-        let downstream = get_string(&env, &jdownstream);
+        let upstream = get_string(&env, &jupstream);
         let dot_server = get_string(&env, &jdotServer);
         let name_servers = get_string(&env, &jnameServers);
         let proxy_rules_file = get_string(&env, &jproxyRulesFile);
@@ -401,7 +401,7 @@ pub mod android {
 
         let config = match create_config(
             addr,
-            downstream,
+            upstream,
             dot_server,
             name_servers,
             proxy_rules_file,

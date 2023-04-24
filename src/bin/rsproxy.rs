@@ -11,7 +11,7 @@ fn main() -> Result<()> {
 
     let config = create_config(
         args.addr,
-        args.downstream,
+        args.upstream,
         args.dot_server,
         args.name_servers,
         args.proxy_rules_file,
@@ -39,10 +39,10 @@ struct RsproxyArgs {
     #[clap(short = 'a', long, required = true, display_order = 1)]
     addr: String,
 
-    /// downstream which the proxy server will relay traffic to based on proxy rules, [<http|socks5|socks4>://]ip:port
+    /// upstream which the proxy server will relay traffic to based on proxy rules, [<http|socks5|socks4>://]ip:port
     /// for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
-    #[clap(short = 'd', long, default_value = "", display_order = 2)]
-    downstream: String,
+    #[clap(short = 'u', long, default_value = "", display_order = 2)]
+    upstream: String,
 
     /// Path to the proxy rules file
     #[clap(short = 'r', long, default_value = "", display_order = 3)]
@@ -81,7 +81,7 @@ struct RsproxyArgs {
     #[clap(short = 'e', long, default_value = rstun::SUPPORTED_CIPHER_SUITES[0], display_order = 10, possible_values = rstun::SUPPORTED_CIPHER_SUITES)]
     cipher: String,
 
-    /// Applicable only for quic protocol as downstream
+    /// Applicable only for quic protocol as upstream
     /// Max idle timeout for the QUIC connections
     #[clap(short = 'i', long, default_value = "120000", display_order = 11)]
     max_idle_timeout_ms: u64,

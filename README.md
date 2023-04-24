@@ -8,16 +8,16 @@ Features
 
 1. Supports [HTTP tunneling](https://en.wikipedia.org/wiki/HTTP_tunnel) and basic HTTP proxy.
 2. Supports `CONNECT` command of both [SOCKS5](https://www.rfc-editor.org/rfc/rfc1928) and [SOCKS4](https://www.openssh.com/txt/socks4.protocol) with [SOCKS4a](https://www.openssh.com/txt/socks4a.protocol) extension. In the case of being a node in a proxy chain, the implementation always delays DNS resolution to the next node, only when acting as the last node will it resolve DNS.
-3. Proxy chaining with the `--downstream` option. e.g. `--downstream http://ip:port` or `--downstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
+3. Proxy chaining with the `--upstream` option. e.g. `--upstream http://ip:port` or `--upstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
 4. Proxy over [QUIC](https://quicwg.org/), i.e. `http+quic`, `socks5+quic` and `socks4+quic`. For example:
     * Start a QUIC server backed by an HTTP proxy on a remote server (HTTP proxy over QUIC):
       * `rsproxy -a http+quic://0.0.0.0:3515`
     * Start a local SOCKS5 proxy and forward all its traffic to the HTTP proxy server through QUIC tunnel (everything is encrypted):
-      * `rsproxy -a socks5://127.0.0.1:9000 --downstream http+quic://DOMAIN:3515`
+      * `rsproxy -a socks5://127.0.0.1:9000 --upstream http+quic://DOMAIN:3515`
 
     Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which rsproxy uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
 
-5. Supports simple proxy rules, traffic will be relayed to downstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
+5. Supports simple proxy rules, traffic will be relayed to upstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
     * example.com
     * .example.com
     * ||example.com
@@ -36,8 +36,8 @@ OPTIONS:
             Server address [<http|socks5|socks4|http+quic|socks5+quic|socks4+quic>://][ip:]port for
             example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
 
-    -d, --downstream <DOWNSTREAM>
-            downstream which the proxy server will relay traffic to based on proxy rules,
+    -u, --upstream <UPSTREAM>
+            upstream which the proxy server will relay traffic to based on proxy rules,
             [<http|socks5|socks4>://]ip:port for example: http://127.0.0.1:8000,
             http+quic://127.0.0.1:8000 [default: ]
 
@@ -70,7 +70,7 @@ OPTIONS:
             chacha20-poly1305] [possible values: chacha20-poly1305, aes-256-gcm, aes-128-gcm]
 
     -i, --max-idle-timeout-ms <MAX_IDLE_TIMEOUT_MS>
-            Applicable only for quic protocol as downstream Max idle timeout for the QUIC
+            Applicable only for quic protocol as upstream Max idle timeout for the QUIC
             connections [default: 120000]
 
     -w, --watch-proxy-rules-change

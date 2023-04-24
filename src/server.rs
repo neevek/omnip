@@ -111,13 +111,13 @@ impl Server {
                 self.set_and_post_server_state(ServerState::Preparing);
 
                 let require_quic_server = self.config.is_layered_proto;
-                let require_quic_client = self.config.is_downstream_layered_proto;
-                let mut proxy_downstream_addr = None;
+                let require_quic_client = self.config.is_upstream_layered_proto;
+                let mut proxy_upstream_addr = None;
                 let mut quic_client = None;
 
                 if require_quic_client {
                     let quic_client_config = QuicClientConfig {
-                        server_addr: self.config.downstream_addr.clone().unwrap(),
+                        server_addr: self.config.upstream_addr.clone().unwrap(),
                         local_access_server_addr:
                             crate::local_ipv4_socket_addr_with_unspecified_port(),
                         common_cfg: self.common_quic_config.clone(),
@@ -132,8 +132,8 @@ impl Server {
                     });
 
                     client.start_access_server().await?;
-                    // make QUIC tunnel as the downstream of the proxy_server
-                    proxy_downstream_addr = client.access_server_addr();
+                    // make QUIC tunnel as the upstream of the proxy_server
+                    proxy_upstream_addr = client.access_server_addr();
                     quic_client = Some(client);
 
                     #[cfg(target_os = "android")]
@@ -142,7 +142,7 @@ impl Server {
                             ServerInfoType::ProxyMessage,
                             Box::new(format!(
                                 "Tunnel access server bound to: {}",
-                                proxy_downstream_addr.unwrap()
+                                proxy_upstream_addr.unwrap()
                             )),
                         ));
                     }
@@ -159,7 +159,7 @@ impl Server {
                 let proxy_addr = proxy_listener.local_addr().unwrap();
 
                 if require_quic_server || require_quic_client {
-                    self.serve_async(proxy_listener, proxy_downstream_addr)
+                    self.serve_async(proxy_listener, proxy_upstream_addr)
                         .await;
 
                     if let Some(mut qc) = quic_client {
@@ -169,7 +169,7 @@ impl Server {
                     if require_quic_server {
                         let quic_server_config = QuicServerConfig {
                             server_addr: orig_server_addr,
-                            downstream_addr: proxy_addr, // use proxy as the downstream of the QUIC tunnel
+                            upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
                             common_cfg: self.common_quic_config.clone(),
                         };
                         let mut quic_server = QuicServer::new(quic_server_config);
@@ -177,7 +177,7 @@ impl Server {
                         quic_server.serve().await;
                     }
                 } else {
-                    self.serve(proxy_listener, proxy_downstream_addr).await;
+                    self.serve(proxy_listener, proxy_upstream_addr).await;
                 }
 
                 Ok::<(), anyhow::Error>(())
@@ -214,16 +214,16 @@ impl Server {
     async fn serve_async(
         self: &Arc<Self>,
         proxy_listener: TcpListener,
-        downstream_addr: Option<SocketAddr>,
+        upstream_addr: Option<SocketAddr>,
     ) {
         let mut this = self.clone();
-        tokio::spawn(async move { this.serve(proxy_listener, downstream_addr).await });
+        tokio::spawn(async move { this.serve(proxy_listener, upstream_addr).await });
     }
 
     async fn serve(
         self: &mut Arc<Self>,
         proxy_listener: TcpListener,
-        downstream_addr: Option<SocketAddr>,
+        upstream_addr: Option<SocketAddr>,
     ) {
         self.set_and_post_server_state(ServerState::ResolvingDNS);
 
@@ -272,7 +272,7 @@ impl Server {
                 Ok((inbound_stream, _addr)) => {
                     let resolver = resolver.clone();
                     let system_resolver = system_resolver.clone();
-                    let downstream_type = self.config.downstream_type.clone();
+                    let upstream_type = self.config.upstream_type.clone();
                     let proxy_rule_manager = inner_state!(self, proxy_rule_manager).clone();
                     let traffic_data_sender = traffic_data_sender.clone();
                     let handler = self.create_proxy_handler();
@@ -283,8 +283,8 @@ impl Server {
                             system_resolver,
                             handler,
                             inbound_stream,
-                            downstream_type,
-                            downstream_addr,
+                            upstream_type,
+                            upstream_addr,
                             proxy_rule_manager,
                             traffic_data_sender,
                         )
@@ -331,8 +331,8 @@ impl Server {
         system_resolver: Arc<DNSResolver>,
         mut proxy_handler: Box<dyn ProxyHandler + Send + Sync>,
         mut inbound_stream: TcpStream,
-        downstream_type: Option<ProtoType>,
-        downstream_addr: Option<SocketAddr>,
+        upstream_type: Option<ProtoType>,
+        upstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
         traffic_data_sender: Sender<ProxyTraffic>,
     ) -> Result<(), ProxyError> {
@@ -363,12 +363,12 @@ impl Server {
             let mut outbound_type = OutboundType::Direct;
             let mut outbound_stream = None;
 
-            if addr.is_domain() && downstream_addr.is_some() {
+            if addr.is_domain() && upstream_addr.is_some() {
                 let domain = addr.unwrap_domain();
                 if proxy_rule_manager.is_none()
                     || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
                 {
-                    outbound_type = match downstream_type.unwrap() {
+                    outbound_type = match upstream_type.unwrap() {
                         ProtoType::Http => OutboundType::HttpProxy,
                         ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
                         ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
@@ -376,15 +376,15 @@ impl Server {
 
                     debug!(
                         "forward payload to next proxy({:?}), {} -> {:?}",
-                        outbound_type, addr, downstream_addr
+                        outbound_type, addr, upstream_addr
                     );
 
-                    outbound_stream = match TcpStream::connect(downstream_addr.unwrap()).await {
+                    outbound_stream = match TcpStream::connect(upstream_addr.unwrap()).await {
                         Ok(stream) => Some(stream),
                         Err(e) => {
                             error!(
-                                "failed to connect to downstream: {}, err:{}",
-                                downstream_addr.unwrap(),
+                                "failed to connect to upstream: {}, err:{}",
+                                upstream_addr.unwrap(),
                                 e
                             );
                             None
@@ -551,8 +551,8 @@ impl Server {
         }
 
         if !proxy_rules_file.is_empty() {
-            if self.config.downstream_addr.is_none() {
-                log::warn!("no downstream specified, proxy rules ignored.");
+            if self.config.upstream_addr.is_none() {
+                log::warn!("no upstream specified, proxy rules ignored.");
                 return Ok(());
             }
 

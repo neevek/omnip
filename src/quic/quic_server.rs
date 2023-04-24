@@ -16,7 +16,7 @@ impl QuicServer {
         config.cert_path = quic_server_config.common_cfg.cert.to_string();
         config.key_path = quic_server_config.common_cfg.key.to_string();
         config.max_idle_timeout_ms = quic_server_config.common_cfg.max_idle_timeout_ms;
-        config.downstreams = vec![quic_server_config.downstream_addr];
+        config.upstreams = vec![quic_server_config.upstream_addr];
         let server = rstun::Server::new(config);
         QuicServer { server }
     }
