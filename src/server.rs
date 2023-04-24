@@ -112,10 +112,11 @@ impl Server {
 
                 let require_quic_server = self.config.is_layered_proto;
                 let require_quic_client = self.config.is_upstream_layered_proto;
-                let mut proxy_upstream_addr = None;
                 let mut quic_client = None;
+                let proxy_upstream_addr;
 
                 if require_quic_client {
+                    // with +quic protocols, quic_client will be used to connect to the upstream
                     let quic_client_config = QuicClientConfig {
                         server_addr: self.config.upstream_addr.clone().unwrap(),
                         local_access_server_addr:
@@ -146,6 +147,11 @@ impl Server {
                             )),
                         ));
                     }
+                } else {
+                    proxy_upstream_addr = match &self.config.upstream_addr {
+                        Some(upstream) => upstream.to_socket_addr(),
+                        None => None
+                    };
                 }
 
                 let orig_server_addr = self.config.addr;
@@ -269,7 +275,7 @@ impl Server {
 
         loop {
             match proxy_listener.accept().await {
-                Ok((inbound_stream, _addr)) => {
+                Ok((inbound_stream, addr)) => {
                     let resolver = resolver.clone();
                     let system_resolver = system_resolver.clone();
                     let upstream_type = self.config.upstream_type.clone();
@@ -296,6 +302,7 @@ impl Server {
                             _ => {}
                         })
                         .ok();
+                        debug!("connection closed: {}", addr);
                     });
                 }
 
