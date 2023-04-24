@@ -423,7 +423,17 @@ impl Server {
                         outbound_stream
                     }
 
-                    Host::IP(ip) => Self::create_tcp_stream(*ip, addr.port).await,
+                    Host::IP(ip) => {
+                        let is_valid_ip = match ip {
+                            IpAddr::V4(ip) => !ip.is_private() && !ip.is_loopback() && !ip.is_multicast(),
+                            IpAddr::V6(ip) => !ip.is_loopback() && !ip.is_multicast(),
+                        };
+                        if !is_valid_ip {
+                            log::warn!("rejected invalid ip: {}", ip);
+                            return Err(ProxyError::BadRequest);
+                        }
+                        Self::create_tcp_stream(*ip, addr.port).await
+                    }
                 };
             }
 
