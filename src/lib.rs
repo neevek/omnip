@@ -258,6 +258,11 @@ pub fn parse_server_addr(
         }
     };
 
+    if !url.has_host() {
+        error!("invalid server address: {}", addr);
+        return (None, None, false);
+    }
+
     let mut server_type = None;
     let mut layered_type = None;
     supported_protocols.iter().for_each(|v| {
