@@ -170,7 +170,7 @@ pub struct Config {
     pub addr: SocketAddr,
     pub is_layered_proto: bool,
     pub downstream_type: Option<ProtoType>,
-    pub downstream_addr: Option<SocketAddr>,
+    pub downstream_addr: Option<NetAddr>,
     pub is_downstream_layered_proto: bool,
     pub proxy_rules_file: String,
     pub threads: usize,
@@ -308,7 +308,6 @@ pub fn create_config(
         log_and_bail!("invalid downstream address: {}", downstream);
     }
 
-    let mut downstream_socket_addr = None;
     if is_layered_proto && is_downstream_layered_proto {
         log_and_bail!(
             "QUIC server and QUIC downstream cannot be chained: {} -> {:?}",
@@ -316,11 +315,8 @@ pub fn create_config(
             downstream_addr
         );
     } else if let Some(ref downstream) = downstream_addr {
-        if downstream.is_domain() && is_downstream_layered_proto {
+        if downstream.is_domain() && !is_downstream_layered_proto {
             log_and_bail!("only IP address is allowed for downstream with non-layered protocols, invalid downstream: {}", downstream);
-        }
-        if downstream.is_ip() {
-            downstream_socket_addr = downstream.to_socket_addr();
         }
     }
 
@@ -335,7 +331,7 @@ pub fn create_config(
         addr: server_addr,
         is_layered_proto,
         downstream_type,
-        downstream_addr: downstream_socket_addr,
+        downstream_addr,
         is_downstream_layered_proto,
         proxy_rules_file,
         threads: worker_threads,

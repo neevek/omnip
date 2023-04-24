@@ -4,8 +4,8 @@ use crate::server_info_bridge::{ProxyTraffic, ServerInfo, ServerInfoBridge, Serv
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
 use crate::{
-    utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError, ProxyRuleManager,
-    QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
+    utils, CommonQuicConfig, Config, Host, ProtoType, ProxyError, ProxyRuleManager, QuicClient,
+    QuicClientConfig, QuicServer, QuicServerConfig,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::TryFutureExt;
@@ -112,12 +112,12 @@ impl Server {
 
                 let require_quic_server = self.config.is_layered_proto;
                 let require_quic_client = self.config.is_downstream_layered_proto;
-                let mut proxy_downstream_addr = self.config.downstream_addr;
+                let mut proxy_downstream_addr = None;
                 let mut quic_client = None;
 
                 if require_quic_client {
                     let quic_client_config = QuicClientConfig {
-                        server_addr: NetAddr::from_socket_addr(proxy_downstream_addr.unwrap()),
+                        server_addr: self.config.downstream_addr.clone().unwrap(),
                         local_access_server_addr:
                             crate::local_ipv4_socket_addr_with_unspecified_port(),
                         common_cfg: self.common_quic_config.clone(),
