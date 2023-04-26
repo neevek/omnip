@@ -150,7 +150,7 @@ impl Server {
                 } else {
                     proxy_upstream_addr = match &self.config.upstream_addr {
                         Some(upstream) => upstream.to_socket_addr(),
-                        None => None
+                        None => None,
                     };
                 }
 
@@ -165,8 +165,7 @@ impl Server {
                 let proxy_addr = proxy_listener.local_addr().unwrap();
 
                 if require_quic_server || require_quic_client {
-                    self.serve_async(proxy_listener, proxy_upstream_addr)
-                        .await;
+                    self.serve_async(proxy_listener, proxy_upstream_addr).await;
 
                     if let Some(mut qc) = quic_client {
                         qc.connect_and_serve().await;
@@ -199,10 +198,12 @@ impl Server {
         })?;
 
         let proxy_addr = listener.local_addr().unwrap();
+        let server_type = self.server_type_as_string();
+
         info!("==========================================================");
         info!(
             "proxy server bound to: {}, type: {}",
-            proxy_addr, self.config.server_type
+            proxy_addr, server_type
         );
         info!("==========================================================");
 
@@ -210,7 +211,7 @@ impl Server {
             ServerInfoType::ProxyMessage,
             Box::new(format!(
                 "Proxy server bound to: {}, type: {}",
-                proxy_addr, self.config.server_type
+                proxy_addr, server_type
             )),
         ));
 
@@ -270,7 +271,7 @@ impl Server {
         info!(
             "proxy server started listening, addr: {}, type: {}",
             proxy_listener.local_addr().unwrap(),
-            self.config.server_type
+            self.server_type_as_string()
         );
 
         loop {
@@ -281,13 +282,15 @@ impl Server {
                     let upstream_type = self.config.upstream_type.clone();
                     let proxy_rule_manager = inner_state!(self, proxy_rule_manager).clone();
                     let traffic_data_sender = traffic_data_sender.clone();
-                    let handler = self.create_proxy_handler();
+                    let server_type = self.config.server_type.clone();
+                    let server_addr = self.config.addr.clone();
 
                     tokio::spawn(async move {
                         Self::process_stream(
                             resolver,
                             system_resolver,
-                            handler,
+                            server_type,
+                            server_addr,
                             inbound_stream,
                             upstream_type,
                             upstream_addr,
@@ -313,14 +316,26 @@ impl Server {
         }
     }
 
-    fn create_proxy_handler(&self) -> Box<dyn ProxyHandler + Send + Sync> {
-        match self.config.server_type {
-            ProtoType::Http => Box::new(HttpProxyHandler::new()),
-            ProtoType::Socks5 => {
-                Box::new(SocksProxyHandler::new(SocksVersion::V5, self.config.addr))
+    fn create_proxy_handler(
+        server_type: &Option<ProtoType>,
+        server_addr: SocketAddr,
+        first_byte: u8,
+    ) -> Box<dyn ProxyHandler + Send + Sync> {
+        match server_type {
+            Some(ProtoType::Socks5) => {
+                Box::new(SocksProxyHandler::new(SocksVersion::V5, server_addr))
             }
-            ProtoType::Socks4 => {
-                Box::new(SocksProxyHandler::new(SocksVersion::V4, self.config.addr))
+            Some(ProtoType::Socks4) => {
+                Box::new(SocksProxyHandler::new(SocksVersion::V4, server_addr))
+            }
+            Some(ProtoType::Http) => Box::new(HttpProxyHandler::new()),
+            None => {
+                match first_byte as char {
+                    '\x05' => Box::new(SocksProxyHandler::new(SocksVersion::V5, server_addr)),
+                    '\x04' => Box::new(SocksProxyHandler::new(SocksVersion::V4, server_addr)),
+                    // default to HTTP
+                    _ => Box::new(HttpProxyHandler::new()),
+                }
             }
         }
     }
@@ -336,7 +351,8 @@ impl Server {
     async fn process_stream(
         resolver: Arc<DNSResolver>,
         system_resolver: Arc<DNSResolver>,
-        mut proxy_handler: Box<dyn ProxyHandler + Send + Sync>,
+        server_type: Option<ProtoType>,
+        server_addr: SocketAddr,
         mut inbound_stream: TcpStream,
         upstream_type: Option<ProtoType>,
         upstream_addr: Option<SocketAddr>,
@@ -345,12 +361,23 @@ impl Server {
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
+        let mut proxy_handler = None;
         loop {
             let nread = inbound_stream
                 .read(&mut buffer)
                 .await
                 .context("failed to read from inbound_stream")
                 .map_err(|_| ProxyError::BadRequest)?;
+
+            if proxy_handler.is_none() {
+                proxy_handler = Some(Self::create_proxy_handler(
+                    &server_type,
+                    server_addr,
+                    buffer[0],
+                ));
+            }
+
+            let proxy_handler = proxy_handler.as_mut().unwrap();
 
             let addr = match proxy_handler.parse(&buffer[..nread]) {
                 ParseState::Pending => {
@@ -432,7 +459,9 @@ impl Server {
 
                     Host::IP(ip) => {
                         let is_valid_ip = match ip {
-                            IpAddr::V4(ip) => !ip.is_private() && !ip.is_loopback() && !ip.is_multicast(),
+                            IpAddr::V4(ip) => {
+                                !ip.is_private() && !ip.is_loopback() && !ip.is_multicast()
+                            }
                             IpAddr::V6(ip) => !ip.is_loopback() && !ip.is_multicast(),
                         };
                         if !is_valid_ip {
@@ -482,6 +511,13 @@ impl Server {
                 e
             })
             .ok()
+    }
+
+    fn server_type_as_string(&self) -> String {
+        match self.config.server_type {
+            Some(ref server_type) => server_type.to_string(),
+            None => "HTTP|SOCKS5|SOCKS4".to_string(),
+        }
     }
 
     fn matches_proxy_rule(

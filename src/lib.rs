@@ -166,7 +166,7 @@ pub enum LayeredProtoType {
 
 #[derive(Debug)]
 pub struct Config {
-    pub server_type: ProtoType,
+    pub server_type: Option<ProtoType>,
     pub addr: SocketAddr,
     pub is_layered_proto: bool,
     pub upstream_type: Option<ProtoType>,
@@ -230,23 +230,23 @@ pub fn parse_server_addr(
         return (None, None, false);
     }
 
-    let supported_protocols: &[(ProtoType, Option<LayeredProtoType>, &str)] = &[
-        (ProtoType::Http, None, "http"),
-        (ProtoType::Socks5, None, "socks5"),
-        (ProtoType::Socks4, None, "socks4"),
-        (ProtoType::Http, Some(LayeredProtoType::HttpOverQuic), "http+quic"),
-        (ProtoType::Socks5, Some(LayeredProtoType::Socks5OverQuic), "socks5+quic"),
-        (ProtoType::Socks4, Some(LayeredProtoType::Socks4OverQuic), "socks4+quic"),
+    let supported_protocols: &[(Option<ProtoType>, Option<LayeredProtoType>, &str)] = &[
+        (None, None, "unspecified"),
+        (Some(ProtoType::Http), None, "http"),
+        (Some(ProtoType::Socks5), None, "socks5"),
+        (Some(ProtoType::Socks4), None, "socks4"),
+        (Some(ProtoType::Http), Some(LayeredProtoType::HttpOverQuic), "http+quic"),
+        (Some(ProtoType::Socks5), Some(LayeredProtoType::Socks5OverQuic), "socks5+quic"),
+        (Some(ProtoType::Socks4), Some(LayeredProtoType::Socks4OverQuic), "socks4+quic"),
     ];
 
     let addr = if addr.find("://").is_some() {
         addr.to_string()
     } else {
         if addr.rfind("]").is_none() && addr.find(":").is_none() {
-            format!("http://127.0.0.1:{}", addr)
+            format!("unspecified://127.0.0.1:{}", addr)
         } else {
-            // default to Http
-            format!("http://{}", addr)
+            format!("unspecified://{}", addr)
         }
     };
 
@@ -267,23 +267,19 @@ pub fn parse_server_addr(
     let mut layered_type = None;
     supported_protocols.iter().for_each(|v| {
         if url.scheme() == v.2 {
-            server_type = Some(v.0.clone());
+            server_type = v.0.clone();
             layered_type = v.1.clone();
         }
     });
 
-    match server_type {
-        Some(server_type) => {
-            (Some(server_type),
-                Some(NetAddr::new(
-                    url.host().unwrap().to_string().as_str(),
-                    url.port_or_known_default().unwrap(),
-                )),
-                layered_type.is_some()
-            )
-        }
-        None => (None, None, false)
-    }
+    (
+        server_type,
+        Some(NetAddr::new(
+            url.host().unwrap().to_string().as_str(),
+            url.port_or_known_default().unwrap(),
+        )),
+        layered_type.is_some()
+    )
 }
 
 pub fn create_config(
@@ -332,7 +328,7 @@ pub fn create_config(
     };
 
     Ok(Config {
-        server_type: server_type.unwrap(),
+        server_type,
         addr: server_addr,
         is_layered_proto,
         upstream_type,
