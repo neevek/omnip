@@ -63,6 +63,12 @@ pub struct NetAddr {
 
 impl NetAddr {
     pub fn new(host: &str, port: u16) -> Self {
+        // IPv6 assumed if square brackets are found
+        let host = if host.find('[').is_some() && host.find(']').is_some() {
+            &host[1..(host.len() - 1)]
+        } else {
+            host
+        };
         NetAddr {
             host: match host.parse::<IpAddr>() {
                 Ok(ip) => Host::IP(ip),
