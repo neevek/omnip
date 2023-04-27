@@ -26,8 +26,6 @@ Features
 
 
 ```
-rsproxy 0.4.2
-
 USAGE:
     rsproxy [OPTIONS] --addr <ADDR>
 
