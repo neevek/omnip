@@ -458,13 +458,8 @@ impl Server {
                     }
 
                     Host::IP(ip) => {
-                        let is_valid_ip = match ip {
-                            IpAddr::V4(ip) => {
-                                !ip.is_private() && !ip.is_loopback() && !ip.is_multicast()
-                            }
-                            IpAddr::V6(ip) => !ip.is_loopback() && !ip.is_multicast(),
-                        };
-                        if !is_valid_ip {
+                        // TODO avoid loopback connections
+                        if ip.is_loopback() && addr.port == server_addr.port() {
                             log::warn!("rejected invalid ip: {}", ip);
                             return Err(ProxyError::BadRequest);
                         }
