@@ -57,6 +57,7 @@ struct ThreadSafeState {
     watcher: Option<Box<dyn Watcher + Send>>,
     scheduled_start: bool,
     on_info_report_enabled: bool,
+    prefer_upstream: bool,
     server_info_bridge: ServerInfoBridge,
     state: ServerState,
 }
@@ -68,6 +69,7 @@ impl ThreadSafeState {
             watcher: None,
             scheduled_start: false,
             on_info_report_enabled: false,
+            prefer_upstream: false,
             server_info_bridge: ServerInfoBridge::new(),
             state: ServerState::Idle,
         }))
@@ -284,6 +286,7 @@ impl Server {
                     let traffic_data_sender = traffic_data_sender.clone();
                     let server_type = self.config.server_type.clone();
                     let server_addr = self.config.addr.clone();
+                    let prefer_upstream = inner_state!(self, prefer_upstream).clone();
 
                     tokio::spawn(async move {
                         Self::process_stream(
@@ -296,6 +299,7 @@ impl Server {
                             upstream_addr,
                             proxy_rule_manager,
                             traffic_data_sender,
+                            prefer_upstream,
                         )
                         .await
                         .map_err(|e| match e {
@@ -358,6 +362,7 @@ impl Server {
         upstream_addr: Option<SocketAddr>,
         proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
         traffic_data_sender: Sender<ProxyTraffic>,
+        prefer_upstream: bool,
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
@@ -397,10 +402,18 @@ impl Server {
             let mut outbound_type = OutboundType::Direct;
             let mut outbound_stream = None;
 
-            if addr.is_domain() && upstream_addr.is_some() {
-                let domain = addr.unwrap_domain();
-                if proxy_rule_manager.is_none()
-                    || Self::matches_proxy_rule(proxy_rule_manager.unwrap(), domain, addr.port)
+            if upstream_addr.is_some()
+                && ((addr.is_domain() && !addr.is_internal_domain())
+                    || (addr.is_ip() && !addr.is_internal_ip()))
+            {
+                if prefer_upstream
+                    || proxy_rule_manager.is_none()
+                    || (addr.is_domain()
+                        && Self::matches_proxy_rule(
+                            proxy_rule_manager.unwrap(),
+                            addr.unwrap_domain(),
+                            addr.port,
+                        ))
                 {
                     outbound_type = match upstream_type.unwrap() {
                         ProtoType::Http => OutboundType::HttpProxy,
@@ -710,5 +723,14 @@ impl Server {
     pub fn set_enable_on_info_report(self: &Arc<Self>, enable: bool) {
         info!("set_enable_on_info_report, enable:{}", enable);
         inner_state!(self, on_info_report_enabled) = enable
+    }
+
+    pub fn set_prefer_upstream(self: &Arc<Self>, prefer_upstream: bool) {
+        info!("set_prefer_upstream, prefer_upstream:{}", prefer_upstream);
+        inner_state!(self, prefer_upstream) = prefer_upstream
+    }
+
+    pub fn is_prefer_upstream(self: &Arc<Self>) -> bool {
+        inner_state!(self, prefer_upstream)
     }
 }

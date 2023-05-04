@@ -20,8 +20,14 @@ use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;
 
-const INTERNAL_DOMAIN_SURRFIX: [&'static str; 5] =
-    [".home", ".lan", ".corp", ".intranet", ".private"];
+const INTERNAL_DOMAIN_SURRFIX: [&'static str; 6] = [
+    ".home",
+    ".lan",
+    ".corp",
+    ".intranet",
+    ".private",
+    "localhost ",
+];
 
 lazy_static! {
     static ref BUFFER_POOL: BytePool::<Vec<u8>> = BytePool::<Vec<u8>>::new();
@@ -115,6 +121,17 @@ impl NetAddr {
             domain.as_str()
         } else {
             panic!("not a domain")
+        }
+    }
+
+    pub fn is_internal_ip(&self) -> bool {
+        if let Host::IP(ref ip) = self.host {
+            match ip {
+                IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+                IpAddr::V6(ip) => ip.is_loopback(),
+            }
+        } else {
+            false
         }
     }
 
@@ -513,6 +530,39 @@ pub mod android {
         }
 
         server.set_enable_on_info_report(bool_enable);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetPreferUpstream(
+        env: JNIEnv,
+        jobj: JClass,
+        server_ptr: jlong,
+        prefer_upstream: jboolean,
+    ) {
+        if server_ptr == 0 {
+            return;
+        }
+
+        let server = &mut *(server_ptr as *mut Arc<Server>);
+        server.set_prefer_upstream(prefer_upstream == 1);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeIsPreferUpstream(
+        env: JNIEnv,
+        jobj: JClass,
+        server_ptr: jlong,
+    ) -> jboolean {
+        if server_ptr == 0 {
+            return 0u8;
+        }
+
+        let server = &mut *(server_ptr as *mut Arc<Server>);
+        if server.is_prefer_upstream() {
+            1u8
+        } else {
+            0u8
+        }
     }
 
     fn get_string(env: &JNIEnv, jstring: &JString) -> String {
