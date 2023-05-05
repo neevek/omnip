@@ -1,4 +1,5 @@
 mod api;
+mod dashboard;
 mod http;
 mod proxy_handler;
 mod proxy_rule_manager;

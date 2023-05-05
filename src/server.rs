@@ -1,4 +1,5 @@
 use crate::api::Api;
+use crate::dashboard::dashboard_server::DashboardServer;
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
 use crate::server_info_bridge::{ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType};
@@ -18,7 +19,7 @@ use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
 use std::fmt::Display;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::str;
 use std::sync::{Arc, Mutex, RwLock};
@@ -111,11 +112,21 @@ impl Server {
             .block_on(async {
                 self.set_and_post_server_state(ServerState::Preparing);
 
+                // start the dashboard server
+                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8811);
+                let dashboard_server = DashboardServer::new();
+                let dashboard_listener = dashboard_server.bind(addr).await?;
+                let dashboard_addr = dashboard_listener.local_addr().ok();
+                dashboard_server
+                    .serve_async(dashboard_listener, self.clone())
+                    .await;
+
                 let require_quic_server = self.config.is_layered_proto;
                 let require_quic_client = self.config.is_upstream_layered_proto;
                 let mut quic_client = None;
                 let proxy_upstream_addr;
 
+                // connect to QUIC server if it is +quic protocols
                 if require_quic_client {
                     // with +quic protocols, quic_client will be used to connect to the upstream
                     let quic_client_config = QuicClientConfig {
@@ -162,11 +173,13 @@ impl Server {
                     orig_server_addr
                 };
 
+                // bind the proxy server first, it may be used as the upstream of the QUIC server
                 let proxy_listener = self.bind(proxy_server_addr).await?;
                 let proxy_addr = proxy_listener.local_addr().unwrap();
 
                 if require_quic_server || require_quic_client {
-                    self.serve_async(proxy_listener, proxy_upstream_addr).await;
+                    self.serve_async(proxy_listener, proxy_upstream_addr, dashboard_addr)
+                        .await;
 
                     if let Some(mut qc) = quic_client {
                         qc.connect_and_serve().await;
@@ -183,7 +196,8 @@ impl Server {
                         quic_server.serve().await;
                     }
                 } else {
-                    self.serve(proxy_listener, proxy_upstream_addr).await;
+                    self.serve(proxy_listener, proxy_upstream_addr, dashboard_addr)
+                        .await;
                 }
 
                 Ok::<(), anyhow::Error>(())
@@ -223,15 +237,20 @@ impl Server {
         self: &Arc<Self>,
         proxy_listener: TcpListener,
         upstream_addr: Option<SocketAddr>,
+        dashboard_addr: Option<SocketAddr>,
     ) {
         let mut this = self.clone();
-        tokio::spawn(async move { this.serve(proxy_listener, upstream_addr).await });
+        tokio::spawn(async move {
+            this.serve(proxy_listener, upstream_addr, dashboard_addr)
+                .await
+        });
     }
 
     async fn serve(
         self: &mut Arc<Self>,
         proxy_listener: TcpListener,
         upstream_addr: Option<SocketAddr>,
+        dashboard_addr: Option<SocketAddr>,
     ) {
         self.set_and_post_server_state(ServerState::ResolvingDNS);
 
@@ -282,9 +301,10 @@ impl Server {
             server_addr: self.config.addr.clone(),
             upstream_type: self.config.upstream_type.clone(),
             upstream_addr,
+            dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
             traffic_data_sender,
-            api: self.clone(),
+            _api: self.clone(),
         });
 
         loop {
@@ -447,7 +467,8 @@ impl Server {
 
                         let mut outbound_stream = None;
                         for ip in ip_arr {
-                            let stream = Self::create_tcp_stream(ip, addr.port).await;
+                            let stream =
+                                Self::create_tcp_stream(SocketAddr::new(ip, addr.port)).await;
                             if stream.is_some() {
                                 outbound_stream = stream;
                                 break;
@@ -460,13 +481,25 @@ impl Server {
                     Host::IP(ip) => {
                         let inbound_addr = inbound_stream.local_addr().unwrap();
                         if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
-                            log::warn!(
-                                "request routing to the proxy server itself is rejected: {}",
-                                inbound_stream.peer_addr().unwrap()
-                            );
-                            return Err(ProxyError::BadRequest);
+                            match params.dashboard_addr {
+                                Some(addr) => {
+                                    debug!(
+                                        "dashboard request: {}",
+                                        inbound_stream.peer_addr().unwrap()
+                                    );
+                                    Self::create_tcp_stream(addr).await
+                                }
+                                None => {
+                                    log::warn!(
+                                    "request routing to the proxy server itself is rejected: {}",
+                                    inbound_stream.peer_addr().unwrap()
+                                );
+                                    return Err(ProxyError::BadRequest);
+                                }
+                            }
+                        } else {
+                            Self::create_tcp_stream(addr.to_socket_addr().unwrap()).await
                         }
-                        Self::create_tcp_stream(*ip, addr.port).await
                     }
                 };
             }
@@ -497,15 +530,16 @@ impl Server {
         Ok(())
     }
 
-    async fn create_tcp_stream(ip: IpAddr, port: u16) -> Option<TcpStream> {
-        if ip.is_unspecified() {
+    async fn create_tcp_stream(addr: SocketAddr) -> Option<TcpStream> {
+        if addr.ip().is_unspecified() {
+            error!("address is unspecified: {}", addr);
             return None;
         }
 
-        TcpStream::connect(SocketAddr::new(ip, port))
+        TcpStream::connect(addr)
             .await
             .map_err(|e| {
-                error!("failed to connect to address: {}:{}, err:{}", ip, port, e);
+                error!("failed to connect to address: {}, err:{}", addr, e);
                 e
             })
             .ok()
@@ -734,7 +768,8 @@ struct ProxySupportParams {
     server_addr: SocketAddr,
     upstream_type: Option<ProtoType>,
     upstream_addr: Option<SocketAddr>,
+    dashboard_addr: Option<SocketAddr>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     traffic_data_sender: Sender<ProxyTraffic>,
-    api: Arc<dyn Api>,
+    _api: Arc<dyn Api>,
 }
