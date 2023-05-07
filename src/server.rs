@@ -471,9 +471,12 @@ impl Server {
                     }
 
                     Host::IP(ip) => {
-                        // TODO avoid loopback connections
-                        if ip.is_loopback() && addr.port == server_addr.port() {
-                            log::warn!("rejected invalid ip: {}", ip);
+                        let inbound_addr = inbound_stream.local_addr().unwrap();
+                        if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
+                            log::warn!(
+                                "request routing to the proxy server itself is rejected: {}",
+                                inbound_stream.peer_addr().unwrap()
+                            );
                             return Err(ProxyError::BadRequest);
                         }
                         Self::create_tcp_stream(*ip, addr.port).await
