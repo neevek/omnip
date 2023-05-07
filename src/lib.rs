@@ -1,3 +1,4 @@
+mod api;
 mod http;
 mod proxy_handler;
 mod proxy_rule_manager;
@@ -8,6 +9,7 @@ mod socks;
 mod utils;
 
 use anyhow::{bail, Result};
+pub use api::Api;
 use byte_pool::{Block, BytePool};
 use lazy_static::lazy_static;
 use log::{error, warn};

@@ -1,3 +1,4 @@
+use crate::api::Api;
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
 use crate::server_info_bridge::{ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType};
@@ -90,13 +91,11 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config, common_quic_config: CommonQuicConfig) -> Arc<Self> {
-        let server = Arc::new(Server {
+        Arc::new(Server {
             config,
             common_quic_config,
             inner_state: ThreadSafeState::new(),
-        });
-
-        server
+        })
     }
 
     pub fn set_scheduled_start(self: &Arc<Self>) {
@@ -276,39 +275,33 @@ impl Server {
             self.server_type_as_string()
         );
 
+        let psp = Arc::new(ProxySupportParams {
+            resolver,
+            system_resolver,
+            server_type: self.config.server_type.clone(),
+            server_addr: self.config.addr.clone(),
+            upstream_type: self.config.upstream_type.clone(),
+            upstream_addr,
+            proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
+            traffic_data_sender,
+            api: self.clone(),
+        });
+
         loop {
             match proxy_listener.accept().await {
                 Ok((inbound_stream, addr)) => {
-                    let resolver = resolver.clone();
-                    let system_resolver = system_resolver.clone();
-                    let upstream_type = self.config.upstream_type.clone();
-                    let proxy_rule_manager = inner_state!(self, proxy_rule_manager).clone();
-                    let traffic_data_sender = traffic_data_sender.clone();
-                    let server_type = self.config.server_type.clone();
-                    let server_addr = self.config.addr.clone();
+                    let psp = psp.clone();
                     let prefer_upstream = inner_state!(self, prefer_upstream).clone();
-
                     tokio::spawn(async move {
-                        Self::process_stream(
-                            resolver,
-                            system_resolver,
-                            server_type,
-                            server_addr,
-                            inbound_stream,
-                            upstream_type,
-                            upstream_addr,
-                            proxy_rule_manager,
-                            traffic_data_sender,
-                            prefer_upstream,
-                        )
-                        .await
-                        .map_err(|e| match e {
-                            ProxyError::BadRequest | ProxyError::BadGateway(_) => {
-                                error!("{:?}", e);
-                            }
-                            _ => {}
-                        })
-                        .ok();
+                        Self::process_stream(inbound_stream, psp, prefer_upstream)
+                            .await
+                            .map_err(|e| match e {
+                                ProxyError::BadRequest | ProxyError::BadGateway(_) => {
+                                    error!("{:?}", e);
+                                }
+                                _ => {}
+                            })
+                            .ok();
                         debug!("connection closed: {}", addr);
                     });
                 }
@@ -353,15 +346,8 @@ impl Server {
     }
 
     async fn process_stream(
-        resolver: Arc<DNSResolver>,
-        system_resolver: Arc<DNSResolver>,
-        server_type: Option<ProtoType>,
-        server_addr: SocketAddr,
         mut inbound_stream: TcpStream,
-        upstream_type: Option<ProtoType>,
-        upstream_addr: Option<SocketAddr>,
-        proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-        traffic_data_sender: Sender<ProxyTraffic>,
+        params: Arc<ProxySupportParams>,
         prefer_upstream: bool,
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
@@ -376,8 +362,8 @@ impl Server {
 
             if proxy_handler.is_none() {
                 proxy_handler = Some(Self::create_proxy_handler(
-                    &server_type,
-                    server_addr,
+                    &params.server_type,
+                    params.server_addr,
                     buffer[0],
                 ));
             }
@@ -402,20 +388,20 @@ impl Server {
             let mut outbound_type = OutboundType::Direct;
             let mut outbound_stream = None;
 
-            if upstream_addr.is_some()
+            if params.upstream_addr.is_some()
                 && ((addr.is_domain() && !addr.is_internal_domain())
                     || (addr.is_ip() && !addr.is_internal_ip()))
             {
                 if prefer_upstream
-                    || proxy_rule_manager.is_none()
+                    || params.proxy_rule_manager.is_none()
                     || (addr.is_domain()
                         && Self::matches_proxy_rule(
-                            proxy_rule_manager.unwrap(),
+                            params.proxy_rule_manager.as_ref().unwrap(),
                             addr.unwrap_domain(),
                             addr.port,
                         ))
                 {
-                    outbound_type = match upstream_type.unwrap() {
+                    outbound_type = match params.upstream_type.as_ref().unwrap() {
                         ProtoType::Http => OutboundType::HttpProxy,
                         ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
                         ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
@@ -423,15 +409,16 @@ impl Server {
 
                     debug!(
                         "forward payload to next proxy({:?}), {} -> {:?}",
-                        outbound_type, addr, upstream_addr
+                        outbound_type, addr, params.upstream_addr
                     );
 
-                    outbound_stream = match TcpStream::connect(upstream_addr.unwrap()).await {
+                    outbound_stream = match TcpStream::connect(params.upstream_addr.unwrap()).await
+                    {
                         Ok(stream) => Some(stream),
                         Err(e) => {
                             error!(
                                 "failed to connect to upstream: {}, err:{}",
-                                upstream_addr.unwrap(),
+                                params.upstream_addr.unwrap(),
                                 e
                             );
                             None
@@ -445,9 +432,9 @@ impl Server {
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
                         let resolver = if addr.is_internal_domain() {
-                            &system_resolver
+                            &params.system_resolver
                         } else {
-                            &resolver
+                            &params.resolver
                         };
 
                         let ip_arr = resolver.lookup(domain.as_str()).await.map_err(|e| {
@@ -493,7 +480,7 @@ impl Server {
                     Self::start_stream_transfer(
                         &mut inbound_stream,
                         outbound_stream,
-                        &traffic_data_sender,
+                        &params.traffic_data_sender,
                     )
                     .await?;
                 }
@@ -532,7 +519,7 @@ impl Server {
     }
 
     fn matches_proxy_rule(
-        mut proxy_rule_manager: Arc<RwLock<ProxyRuleManager>>,
+        mut proxy_rule_manager: &Arc<RwLock<ProxyRuleManager>>,
         domain: &str,
         port: u16,
     ) -> bool {
@@ -727,13 +714,27 @@ impl Server {
         info!("set_enable_on_info_report, enable:{}", enable);
         inner_state!(self, on_info_report_enabled) = enable
     }
+}
 
-    pub fn set_prefer_upstream(self: &Arc<Self>, prefer_upstream: bool) {
-        info!("set_prefer_upstream, prefer_upstream:{}", prefer_upstream);
-        inner_state!(self, prefer_upstream) = prefer_upstream
+impl Api for Server {
+    fn set_prefer_upstream(&self, flag: bool) {
+        info!("set_prefer_upstream, prefer_upstream:{}", flag);
+        inner_state!(self, prefer_upstream) = flag
     }
 
-    pub fn is_prefer_upstream(self: &Arc<Self>) -> bool {
+    fn is_prefer_upstream(&self) -> bool {
         inner_state!(self, prefer_upstream)
     }
+}
+
+struct ProxySupportParams {
+    resolver: Arc<DNSResolver>,
+    system_resolver: Arc<DNSResolver>,
+    server_type: Option<ProtoType>,
+    server_addr: SocketAddr,
+    upstream_type: Option<ProtoType>,
+    upstream_addr: Option<SocketAddr>,
+    proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
+    traffic_data_sender: Sender<ProxyTraffic>,
+    api: Arc<dyn Api>,
 }
