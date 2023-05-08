@@ -45,7 +45,7 @@ fn copy_web_assets(
 
             writeln!(
                 blob_index_file,
-                "{} {} {}",
+                "/{} {} {}",
                 &path.to_path_buf().to_str().unwrap()[SOURCE_DIR.len()..],
                 offset,
                 file_len
