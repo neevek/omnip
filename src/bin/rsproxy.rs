@@ -25,6 +25,8 @@ fn main() -> Result<()> {
         password: args.password,
         cipher: args.cipher,
         max_idle_timeout_ms: args.max_idle_timeout_ms,
+        retry_interval_ms: args.retry_interval_ms,
+        threads: args.threads,
     };
 
     let mut server = Server::new(config, common_quic_config);
@@ -86,10 +88,15 @@ struct RsproxyArgs {
     #[clap(short = 'i', long, default_value = "120000", display_order = 11)]
     max_idle_timeout_ms: u64,
 
+    /// Applicable only for quic protocol as upstream
+    /// Max idle timeout for the QUIC connections
+    #[clap(short = 'R', long, default_value = "5000", display_order = 12)]
+    retry_interval_ms: u64,
+
     /// reload proxy rules if updated
-    #[clap(short = 'w', long, action, display_order = 12)]
+    #[clap(short = 'w', long, action, display_order = 13)]
     watch_proxy_rules_change: bool,
 
-    #[clap(short = 'l', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 13)]
+    #[clap(short = 'l', long, possible_values = &["T", "D", "I", "W", "E"], default_value = "I", display_order = 14)]
     loglevel: String,
 }

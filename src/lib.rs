@@ -18,6 +18,7 @@ pub use proxy_rule_manager::ProxyRuleManager;
 pub use quic::quic_client::QuicClient;
 pub use quic::quic_server::QuicServer;
 use rs_utilities::log_and_bail;
+use serde::{Deserialize, Serialize};
 pub use server::Server;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -49,7 +50,7 @@ pub enum ProxyError {
     Disconnected(anyhow::Error),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Host {
     IP(IpAddr),
     Domain(String),
@@ -64,7 +65,7 @@ impl Display for Host {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NetAddr {
     pub host: Host,
     pub port: u16,
@@ -165,11 +166,41 @@ impl std::fmt::Display for NetAddr {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum ProtoType {
     Http,
     Socks5,
     Socks4,
+}
+
+impl ProtoType {
+    pub fn format_as_string(&self, combine_layer_proto: bool) -> String {
+        match self {
+            ProtoType::Http => {
+                if combine_layer_proto {
+                    "http+quic"
+                } else {
+                    "http"
+                }
+            }
+            ProtoType::Socks5 => {
+                if combine_layer_proto {
+                    "socks5+quic"
+                } else {
+                    "http"
+                }
+            }
+            ProtoType::Socks4 => {
+                if combine_layer_proto {
+                    "socks4+quic"
+                } else {
+                    "http"
+                }
+            }
+        }
+        .to_string()
+    }
 }
 
 impl std::fmt::Display for ProtoType {
@@ -190,7 +221,8 @@ pub enum LayeredProtoType {
     Socks4OverQuic,
 }
 
-#[derive(Debug)]
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub server_type: Option<ProtoType>,
     pub addr: SocketAddr,
@@ -212,20 +244,45 @@ pub struct QuicServerConfig {
     pub common_cfg: CommonQuicConfig,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QuicClientConfig {
     pub server_addr: NetAddr,
     pub local_access_server_addr: SocketAddr,
     pub common_cfg: CommonQuicConfig,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommonQuicConfig {
     pub cert: String,
     pub key: String,
     pub cipher: String,
     pub password: String,
     pub max_idle_timeout_ms: u64,
+    pub retry_interval_ms: u64,
+    pub threads: usize,
+}
+
+impl Config {
+    pub fn server_addr_as_string(&self) -> String {
+        let proto = match self.server_type {
+            Some(ref pt) => pt.format_as_string(self.is_layered_proto),
+            None => "".to_string(),
+        };
+        format!("{}://{}", proto, self.addr.to_string())
+    }
+
+    pub fn upstream_as_string(&self) -> String {
+        match self.upstream_addr {
+            Some(ref upstream_addr) => {
+                let proto = match self.upstream_type {
+                    Some(ref pt) => pt.format_as_string(self.is_upstream_layered_proto),
+                    None => "".to_string(),
+                };
+                format!("{}://{}", proto, upstream_addr.to_string())
+            }
+            None => "".to_string(),
+        }
+    }
 }
 
 pub fn local_ipv4_socket_addr_with_unspecified_port() -> SocketAddr {
@@ -410,6 +467,7 @@ pub mod android {
         jcipher: JString,
         jpassword: JString,
         jmaxIdleTimeoutMs: jint,
+        jretryIntervalMs: jint,
         jthreads: jint,
     ) -> jlong {
         if jaddr.is_null() {
@@ -448,6 +506,8 @@ pub mod android {
             password,
             cipher,
             max_idle_timeout_ms: jmaxIdleTimeoutMs as u64,
+            retry_interval_ms: jretryIntervalMs as u64,
+            threads: jthreads as usize,
         };
 
         Box::into_raw(Box::new(Server::new(config, common_quic_config))) as jlong

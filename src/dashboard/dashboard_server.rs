@@ -1,4 +1,5 @@
 use super::{JsonRequest, JsonResponse};
+use crate::api::ServerConfig;
 use crate::Api;
 use anyhow::Result;
 use http::request::Parts;
@@ -53,7 +54,10 @@ lazy_static! {
     };
     static ref REQUEST_HANDLERS_MAP: RequestHandlersMap = {
         let mut map = HashMap::<&'static str, RequestHandler>::new();
+        map.insert("/api/server_state", DashboardService::server_state);
+        map.insert("/api/server_config", DashboardService::server_config);
         map.insert("/api/prefer_upstream", DashboardService::prefer_upstream);
+        map.insert("/api/apply_changes", DashboardService::apply_changes);
         map
     };
 }
@@ -158,15 +162,54 @@ impl DashboardService {
         Ok(Body::from(bytes))
     }
 
+    fn server_state(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::GET => Self::convert_resp_to_body(
+                JsonResponse::<crate::api::ServerState>::succeed(Some(api.get_server_state())),
+            )?,
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
+    fn server_config(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::GET => {
+                Self::convert_resp_to_body(JsonResponse::<crate::api::ServerConfig>::succeed(
+                    Some(api.get_server_config()),
+                ))?
+            }
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
     fn prefer_upstream(api: Arc<dyn Api>, head: Parts, body: Bytes) -> Result<Body, JsonResponse> {
         let body = match head.method {
-            http::Method::GET => Self::convert_resp_to_body(JsonResponse::<bool>::succeed(Some(
-                api.is_prefer_upstream(),
-            )))?,
             http::Method::POST => {
                 let req = Self::convert_req_to_json::<bool>(body)?;
                 api.set_prefer_upstream(req.data.unwrap());
                 Self::convert_resp_to_body(<JsonResponse>::succeed(None))?
+            }
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
+    fn apply_changes(api: Arc<dyn Api>, head: Parts, body: Bytes) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::POST => {
+                let config = Self::convert_req_to_json::<ServerConfig>(body)?;
+                match api.apply_changes(config.data.unwrap()) {
+                    Ok(res) => {
+                        // TODO handle result
+                        Self::convert_resp_to_body(<JsonResponse>::succeed(None))?
+                    }
+                    _ => Self::convert_resp_to_body(<JsonResponse>::succeed(None))?,
+                }
             }
             _ => return Err(Self::not_supported()),
         };

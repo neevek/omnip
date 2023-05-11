@@ -1,4 +1,4 @@
-use crate::api::Api;
+use crate::api::{self, Api};
 use crate::dashboard::dashboard_server::DashboardServer;
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
@@ -62,6 +62,8 @@ struct ThreadSafeState {
     prefer_upstream: bool,
     server_info_bridge: ServerInfoBridge,
     state: ServerState,
+    quic_client: Option<Arc<QuicClient>>,
+    transient_server_config: api::ServerConfig,
 }
 
 impl ThreadSafeState {
@@ -74,6 +76,8 @@ impl ThreadSafeState {
             prefer_upstream: false,
             server_info_bridge: ServerInfoBridge::new(),
             state: ServerState::Idle,
+            quic_client: None,
+            transient_server_config: api::ServerConfig::default(),
         }))
     }
 }
@@ -92,10 +96,23 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config, common_quic_config: CommonQuicConfig) -> Arc<Self> {
+        let inner_state = ThreadSafeState::new();
+        inner_state.lock().unwrap().transient_server_config = api::ServerConfig {
+            server_addr: config.server_addr_as_string(),
+            upstream_addr: config.upstream_as_string(),
+            password: "".to_string(),
+            idle_timeout: common_quic_config.max_idle_timeout_ms,
+            retry_interval: common_quic_config.retry_interval_ms,
+            cert: common_quic_config.cert.clone(),
+            cipher: common_quic_config.cipher.clone(),
+            name_servers: config.name_servers.clone(),
+            dot_server: config.dot_server.clone(),
+        };
+
         Arc::new(Server {
             config,
             common_quic_config,
-            inner_state: ThreadSafeState::new(),
+            inner_state,
         })
     }
 
@@ -113,7 +130,7 @@ impl Server {
                 self.set_and_post_server_state(ServerState::Preparing);
 
                 // start the dashboard server
-                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8811);
+                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
                 let dashboard_server = DashboardServer::new();
                 let dashboard_listener = dashboard_server.bind(addr).await?;
                 let dashboard_addr = dashboard_listener.local_addr().ok();
@@ -123,7 +140,7 @@ impl Server {
 
                 let require_quic_server = self.config.is_layered_proto;
                 let require_quic_client = self.config.is_upstream_layered_proto;
-                let mut quic_client = None;
+                // let mut quic_client = None;
                 let proxy_upstream_addr;
 
                 // connect to QUIC server if it is +quic protocols
@@ -147,7 +164,7 @@ impl Server {
                     client.start_access_server().await?;
                     // make QUIC tunnel as the upstream of the proxy_server
                     proxy_upstream_addr = client.access_server_addr();
-                    quic_client = Some(client);
+                    inner_state!(self, quic_client) = Some(Arc::new(client));
 
                     #[cfg(target_os = "android")]
                     {
@@ -177,27 +194,29 @@ impl Server {
                 let proxy_listener = self.bind(proxy_server_addr).await?;
                 let proxy_addr = proxy_listener.local_addr().unwrap();
 
-                if require_quic_server || require_quic_client {
-                    self.serve_async(proxy_listener, proxy_upstream_addr, dashboard_addr)
+                self.serve_async(proxy_listener, proxy_upstream_addr, dashboard_addr)
+                    .await;
+
+                if require_quic_client {
+                    let join_handle = inner_state!(self, quic_client)
+                        .clone()
+                        .unwrap()
+                        .connect_and_serve_async()
                         .await;
 
-                    if let Some(mut qc) = quic_client {
-                        qc.connect_and_serve().await;
-                    }
+                    debug!("Tunnelling...");
+                    join_handle.await.ok();
+                }
 
-                    if require_quic_server {
-                        let quic_server_config = QuicServerConfig {
-                            server_addr: orig_server_addr,
-                            upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
-                            common_cfg: self.common_quic_config.clone(),
-                        };
-                        let mut quic_server = QuicServer::new(quic_server_config);
-                        quic_server.bind().await?;
-                        quic_server.serve().await;
-                    }
-                } else {
-                    self.serve(proxy_listener, proxy_upstream_addr, dashboard_addr)
-                        .await;
+                if require_quic_server {
+                    let quic_server_config = QuicServerConfig {
+                        server_addr: orig_server_addr,
+                        upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
+                        common_cfg: self.common_quic_config.clone(),
+                    };
+                    let mut quic_server = QuicServer::new(quic_server_config);
+                    quic_server.bind().await?;
+                    quic_server.serve().await;
                 }
 
                 Ok::<(), anyhow::Error>(())
@@ -208,7 +227,7 @@ impl Server {
         self.setup_proxy_rules_manager()?;
 
         let listener = TcpListener::bind(addr).await.map_err(|e| {
-            error!("failed to bind proxy server on address: {}", addr);
+            error!("failed to bind proxy server on address: {addr}");
             e
         })?;
 
@@ -216,17 +235,13 @@ impl Server {
         let server_type = self.server_type_as_string();
 
         info!("==========================================================");
-        info!(
-            "proxy server bound to: {}, type: {}",
-            proxy_addr, server_type
-        );
+        info!("proxy server bound to: {proxy_addr}, type: {server_type}");
         info!("==========================================================");
 
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ProxyMessage,
             Box::new(format!(
-                "Proxy server bound to: {}, type: {}",
-                proxy_addr, server_type
+                "Proxy server bound to: {proxy_addr}, type: {server_type}"
             )),
         ));
 
@@ -304,7 +319,6 @@ impl Server {
             dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
             traffic_data_sender,
-            _api: self.clone(),
         });
 
         loop {
@@ -322,12 +336,12 @@ impl Server {
                                 _ => {}
                             })
                             .ok();
-                        debug!("connection closed: {}", addr);
+                        debug!("connection closed: {addr}");
                     });
                 }
 
                 Err(e) => {
-                    error!("access server failed, err: {}", e);
+                    error!("access server failed, err: {e}");
                 }
             }
         }
@@ -428,8 +442,8 @@ impl Server {
                     };
 
                     debug!(
-                        "forward payload to next proxy({:?}), {} -> {:?}",
-                        outbound_type, addr, params.upstream_addr
+                        "forward payload to next proxy({:?}), {addr} -> {:?}",
+                        outbound_type, params.upstream_addr
                     );
 
                     outbound_stream = match TcpStream::connect(params.upstream_addr.unwrap()).await
@@ -437,9 +451,8 @@ impl Server {
                         Ok(stream) => Some(stream),
                         Err(e) => {
                             error!(
-                                "failed to connect to upstream: {}, err:{}",
-                                params.upstream_addr.unwrap(),
-                                e
+                                "failed to connect to upstream: {}, err: {e}",
+                                params.upstream_addr.unwrap()
                             );
                             None
                         }
@@ -448,7 +461,7 @@ impl Server {
             }
 
             if outbound_type == OutboundType::Direct {
-                debug!("serve request directly: {}", addr);
+                debug!("serve request directly: {addr}");
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
                         let resolver = if addr.is_internal_domain() {
@@ -458,11 +471,7 @@ impl Server {
                         };
 
                         let ip_arr = resolver.lookup(domain.as_str()).await.map_err(|e| {
-                            ProxyError::BadGateway(anyhow!(
-                                "failed to resolve: {}, error: {}",
-                                addr,
-                                e
-                            ))
+                            ProxyError::BadGateway(anyhow!("failed to resolve: {addr}, error: {e}"))
                         })?;
 
                         let mut outbound_stream = None;
@@ -532,14 +541,14 @@ impl Server {
 
     async fn create_tcp_stream(addr: SocketAddr) -> Option<TcpStream> {
         if addr.ip().is_unspecified() {
-            error!("address is unspecified: {}", addr);
+            error!("address is unspecified: {addr}");
             return None;
         }
 
         TcpStream::connect(addr)
             .await
             .map_err(|e| {
-                error!("failed to connect to address: {}, err:{}", addr, e);
+                error!("failed to connect to address: {addr}, err: {e}");
                 e
             })
             .ok()
@@ -579,9 +588,7 @@ impl Server {
             .await?;
 
         debug!(
-            "transfer, out:{}, in:{}, {:?} <-> {:?}",
-            tx_bytes,
-            rx_bytes,
+            "transfer, out:{tx_bytes}, in:{rx_bytes}, {:?} <-> {:?}",
             a_stream.local_addr(),
             b_stream.local_addr()
         );
@@ -632,7 +639,7 @@ impl Server {
     fn setup_proxy_rules_manager(self: &Arc<Self>) -> Result<()> {
         let proxy_rules_file = &self.config.proxy_rules_file;
         if !proxy_rules_file.is_empty() && !Path::new(proxy_rules_file).is_file() {
-            log_and_bail!("proxy rules file does not exist: {}", proxy_rules_file);
+            log_and_bail!("proxy rules file does not exist: {proxy_rules_file}");
         }
 
         if !proxy_rules_file.is_empty() {
@@ -644,11 +651,7 @@ impl Server {
             let mut prm = ProxyRuleManager::default();
             let count = prm.add_rules_by_file(proxy_rules_file);
 
-            info!(
-                "{} proxy rules added with file: {}",
-                count, proxy_rules_file
-            );
-
+            info!("{count} proxy rules added with file: {proxy_rules_file}");
             inner_state!(self, proxy_rule_manager) = Some(Arc::new(RwLock::new(prm)));
 
             if self.config.watch_proxy_rules_change {
@@ -691,8 +694,7 @@ impl Server {
                         let count = prm.add_rules_by_file(proxy_rules_file.as_str());
 
                         info!(
-                            "updated proxy rules from file: {}, rules updated: {}",
-                            proxy_rules_file, count
+                            "updated proxy rules from file: {proxy_rules_file}, rules updated: {count}"
                         );
                     }
                     Ok(Ok(_)) | Ok(Err(_)) => {
@@ -710,7 +712,7 @@ impl Server {
     }
 
     fn set_and_post_server_state(self: &Arc<Self>, state: ServerState) {
-        info!("client state: {}", state);
+        info!("client state: {state}");
         inner_state!(self, state) = state.clone();
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ProxyServerState,
@@ -745,19 +747,43 @@ impl Server {
     }
 
     pub fn set_enable_on_info_report(self: &Arc<Self>, enable: bool) {
-        info!("set_enable_on_info_report, enable:{}", enable);
+        info!("set_enable_on_info_report, enable: {enable}");
         inner_state!(self, on_info_report_enabled) = enable
     }
 }
 
 impl Api for Server {
     fn set_prefer_upstream(&self, flag: bool) {
-        info!("set_prefer_upstream, prefer_upstream:{}", flag);
+        info!("set_prefer_upstream, prefer_upstream: {flag}");
         inner_state!(self, prefer_upstream) = flag
     }
 
-    fn is_prefer_upstream(&self) -> bool {
-        inner_state!(self, prefer_upstream)
+    fn get_server_config(&self) -> api::ServerConfig {
+        inner_state!(self, transient_server_config).clone()
+    }
+
+    fn get_server_state(&self) -> api::ServerState {
+        let tunnel_state = match inner_state!(self, quic_client).as_ref() {
+            Some(qc) => qc.get_state().to_string(),
+            None => "NotConnected".to_string(),
+        };
+        api::ServerState {
+            prefer_upstream: inner_state!(self, prefer_upstream),
+            tunnel_state,
+        }
+    }
+
+    fn apply_changes(&self, _server_config: api::ServerConfig) -> Result<()> {
+        // let tunnel_state = match inner_state!(self, quic_client).as_ref() {
+        //     Some(qc) => {
+        //         let mut quic_client_config = qc.get_config();
+
+        //         let orig_config = inner_state!(self, transient_server_config);
+        //         if server_config != orig_config {}
+        //     }
+        //     None => {}
+        // };
+        Ok(())
     }
 }
 
@@ -771,5 +797,4 @@ struct ProxySupportParams {
     dashboard_addr: Option<SocketAddr>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
     traffic_data_sender: Sender<ProxyTraffic>,
-    _api: Arc<dyn Api>,
 }
