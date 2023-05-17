@@ -1,16 +1,17 @@
-use crate::api::{self, Api};
-use crate::dashboard::dashboard_server::DashboardServer;
+use crate::admin::admin_server::DashboardServer;
+use crate::api::{self, Api, ProxyServerConfig, QuicTunnelConfig};
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
-use crate::server_info_bridge::{ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType};
+use crate::server_info_bridge::{
+    ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType, ServerStats,
+};
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
 use crate::{
-    utils, CommonQuicConfig, Config, Host, ProtoType, ProxyError, ProxyRuleManager, QuicClient,
-    QuicClientConfig, QuicServer, QuicServerConfig,
+    utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError, ProxyRuleManager,
+    QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use futures_util::TryFutureExt;
 use log::{debug, error, info};
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -21,10 +22,12 @@ use std::borrow::BorrowMut;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::str;
+use std::str::{self, FromStr};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::task::JoinHandle;
+
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -59,11 +62,20 @@ struct ThreadSafeState {
     watcher: Option<Box<dyn Watcher + Send>>,
     scheduled_start: bool,
     on_info_report_enabled: bool,
-    prefer_upstream: bool,
     server_info_bridge: ServerInfoBridge,
     state: ServerState,
     quic_client: Option<Arc<QuicClient>>,
-    transient_server_config: api::ServerConfig,
+    dns_resolver: Option<Arc<DNSResolver>>,
+    prefer_upstream: bool,
+    // the following 3 fields are redundant, they exist in this struct because they can use updated
+    upstream: Option<SocketAddr>,
+    dot_server: Option<String>,
+    name_servers: Option<String>,
+    // stats
+    total_rx_bytes: u64,
+    total_tx_bytes: u64,
+    total_connections: u32,
+    ongoing_connections: u32,
 }
 
 impl ThreadSafeState {
@@ -73,11 +85,18 @@ impl ThreadSafeState {
             watcher: None,
             scheduled_start: false,
             on_info_report_enabled: false,
-            prefer_upstream: false,
             server_info_bridge: ServerInfoBridge::new(),
             state: ServerState::Idle,
             quic_client: None,
-            transient_server_config: api::ServerConfig::default(),
+            dns_resolver: None,
+            prefer_upstream: false,
+            upstream: None,
+            dot_server: None,
+            name_servers: None,
+            total_rx_bytes: 0,
+            total_tx_bytes: 0,
+            total_connections: 0,
+            ongoing_connections: 0,
         }))
     }
 }
@@ -85,6 +104,15 @@ impl ThreadSafeState {
 macro_rules! inner_state {
     ($self:ident, $field:ident) => {
         (*$self.inner_state.lock().unwrap()).$field
+    };
+}
+
+macro_rules! copy_inner_state {
+    ($self:expr, $($field:ident),+ $(,)?) => {
+        {
+            let ref st = *$self.inner_state.lock().unwrap();
+            ($(st.$field.clone(),)+)
+        }
     };
 }
 
@@ -96,23 +124,10 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config, common_quic_config: CommonQuicConfig) -> Arc<Self> {
-        let inner_state = ThreadSafeState::new();
-        inner_state.lock().unwrap().transient_server_config = api::ServerConfig {
-            server_addr: config.server_addr_as_string(),
-            upstream_addr: config.upstream_as_string(),
-            password: "".to_string(),
-            idle_timeout: common_quic_config.max_idle_timeout_ms,
-            retry_interval: common_quic_config.retry_interval_ms,
-            cert: common_quic_config.cert.clone(),
-            cipher: common_quic_config.cipher.clone(),
-            name_servers: config.name_servers.clone(),
-            dot_server: config.dot_server.clone(),
-        };
-
         Arc::new(Server {
             config,
             common_quic_config,
-            inner_state,
+            inner_state: ThreadSafeState::new(),
         })
     }
 
@@ -139,48 +154,22 @@ impl Server {
                     .await;
 
                 let require_quic_server = self.config.is_layered_proto;
-                let require_quic_client = self.config.is_upstream_layered_proto;
-                // let mut quic_client = None;
-                let proxy_upstream_addr;
+                let mut quic_client_join_handle = None;
 
-                // connect to QUIC server if it is +quic protocols
-                if require_quic_client {
-                    // with +quic protocols, quic_client will be used to connect to the upstream
-                    let quic_client_config = QuicClientConfig {
-                        server_addr: self.config.upstream_addr.clone().unwrap(),
-                        local_access_server_addr:
-                            crate::local_ipv4_socket_addr_with_unspecified_port(),
-                        common_cfg: self.common_quic_config.clone(),
-                    };
-
-                    let mut client = QuicClient::new(quic_client_config);
-                    let proxy_server = self.clone();
-
-                    client.set_enable_on_info_report(true);
-                    client.set_on_info_listener(move |data: &str| {
-                        proxy_server.post_server_log(data);
-                    });
-
-                    client.start_access_server().await?;
-                    // make QUIC tunnel as the upstream of the proxy_server
-                    proxy_upstream_addr = client.access_server_addr();
-                    inner_state!(self, quic_client) = Some(Arc::new(client));
-
-                    #[cfg(target_os = "android")]
-                    {
-                        self.post_server_info(ServerInfo::new(
-                            ServerInfoType::ProxyMessage,
-                            Box::new(format!(
-                                "Tunnel access server bound to: {}",
-                                proxy_upstream_addr.unwrap()
-                            )),
-                        ));
+                if let Some(upstream) = &self.config.upstream_addr {
+                    // connect to QUIC server if it is +quic protocols
+                    let require_quic_client = self.config.is_upstream_layered_proto;
+                    if require_quic_client {
+                        quic_client_join_handle = Some(
+                            self.start_quic_client(
+                                upstream.clone(),
+                                self.common_quic_config.clone(),
+                            )
+                            .await?,
+                        );
+                    } else {
+                        inner_state!(self, upstream) = upstream.to_socket_addr();
                     }
-                } else {
-                    proxy_upstream_addr = match &self.config.upstream_addr {
-                        Some(upstream) => upstream.to_socket_addr(),
-                        None => None,
-                    };
                 }
 
                 let orig_server_addr = self.config.addr;
@@ -193,19 +182,13 @@ impl Server {
                 // bind the proxy server first, it may be used as the upstream of the QUIC server
                 let proxy_listener = self.bind(proxy_server_addr).await?;
                 let proxy_addr = proxy_listener.local_addr().unwrap();
+                let proxy_server_handle = self.serve_async(proxy_listener, dashboard_addr);
 
-                self.serve_async(proxy_listener, proxy_upstream_addr, dashboard_addr)
-                    .await;
-
-                if require_quic_client {
-                    let join_handle = inner_state!(self, quic_client)
-                        .clone()
-                        .unwrap()
-                        .connect_and_serve_async()
-                        .await;
-
-                    debug!("Tunnelling...");
-                    join_handle.await.ok();
+                // join on the QUIC tunnel after the proxy server is started
+                if let Some(quic_client_join_handle) = quic_client_join_handle {
+                    info!("join on the QUIC tunnel...",);
+                    quic_client_join_handle.await.ok();
+                    info!("QUIC tunnel quit");
                 }
 
                 if require_quic_server {
@@ -218,6 +201,8 @@ impl Server {
                     quic_server.bind().await?;
                     quic_server.serve().await;
                 }
+
+                proxy_server_handle.await.ok();
 
                 Ok::<(), anyhow::Error>(())
             })
@@ -248,39 +233,75 @@ impl Server {
         Ok(listener)
     }
 
-    async fn serve_async(
-        self: &Arc<Self>,
-        proxy_listener: TcpListener,
-        upstream_addr: Option<SocketAddr>,
-        dashboard_addr: Option<SocketAddr>,
-    ) {
-        let mut this = self.clone();
-        tokio::spawn(async move {
-            this.serve(proxy_listener, upstream_addr, dashboard_addr)
-                .await
-        });
+    async fn start_quic_client(
+        &self,
+        quic_server_addr: NetAddr,
+        common_quic_config: CommonQuicConfig,
+    ) -> Result<JoinHandle<()>> {
+        // with +quic protocols, quic_client will be used to connect to the upstream
+        let quic_client_config = QuicClientConfig {
+            server_addr: quic_server_addr,
+            local_access_server_addr: crate::local_ipv4_socket_addr_with_unspecified_port(),
+            common_cfg: common_quic_config,
+        };
+
+        let mut client = QuicClient::new(quic_client_config);
+        if inner_state!(self, on_info_report_enabled) {
+            client.set_enable_on_info_report(true);
+            let info_bridge = inner_state!(self, server_info_bridge).clone();
+            client.set_on_info_listener(move |data: &str| {
+                info_bridge.post_server_log(data);
+            });
+        }
+        client.start_access_server().await?;
+
+        let access_server_addr = client.access_server_addr();
+        info!(
+            "QUIC tunnel access server address: {:?}",
+            access_server_addr
+        );
+
+        // will handover the handle to the caller, so we don't block here
+        let join_handle = client.connect_and_serve_async();
+
+        inner_state!(self, upstream) = access_server_addr;
+        inner_state!(self, quic_client) = Some(Arc::new(client));
+
+        #[cfg(target_os = "android")]
+        {
+            self.post_server_info(ServerInfo::new(
+                ServerInfoType::ProxyMessage,
+                Box::new(format!(
+                    "Tunnel access server bound to: {}",
+                    proxy_upstream_addr.unwrap()
+                )),
+            ));
+        }
+
+        Ok(join_handle)
     }
 
-    async fn serve(
+    fn serve_async(
+        self: &Arc<Self>,
+        proxy_listener: TcpListener,
+        dashboard_addr: Option<SocketAddr>,
+    ) -> JoinHandle<()> {
+        let mut this = self.clone();
+        tokio::spawn(async move { this.serve_internal(proxy_listener, dashboard_addr).await })
+    }
+
+    async fn serve_internal(
         self: &mut Arc<Self>,
         proxy_listener: TcpListener,
-        upstream_addr: Option<SocketAddr>,
         dashboard_addr: Option<SocketAddr>,
     ) {
         self.set_and_post_server_state(ServerState::ResolvingDNS);
 
-        let resolver = Arc::new(
-            rs_utilities::dns::resolver(
-                self.config.dot_server.as_str(),
-                self.config
-                    .name_servers
-                    .split(',')
-                    .skip_while(|&x| x.is_empty())
-                    .map(|e| e.trim().to_string())
-                    .collect(),
-            )
-            .await,
-        );
+        let resolver = Self::create_dns_resolver(
+            self.config.dot_server.as_str(),
+            self.config.name_servers.as_str(),
+        )
+        .await;
 
         // always need a system resolver to resolve local domains
         let system_resolver = if resolver.resolver_type() == DNSResolverType::System {
@@ -292,16 +313,18 @@ impl Server {
             ))
         };
 
+        let resolver_type = resolver.resolver_type().to_string();
+        inner_state!(self, dns_resolver) = Some(resolver);
+
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ProxyDNSResolverType,
-            Box::new(resolver.resolver_type().to_string()),
+            Box::new(resolver_type),
         ));
 
         self.set_and_post_server_state(ServerState::Running);
 
-        let (traffic_data_sender, traffic_data_receiver) =
-            channel::<ProxyTraffic>(TRAFFIC_DATA_QUEUE_SIZE);
-        self.collect_and_report_traffic_data(traffic_data_receiver);
+        let (stats_sender, stats_receiver) = channel::<ServerStats>(TRAFFIC_DATA_QUEUE_SIZE);
+        self.collect_and_report_server_stats(stats_receiver);
 
         info!(
             "proxy server started listening, addr: {}, type: {}",
@@ -310,32 +333,37 @@ impl Server {
         );
 
         let psp = Arc::new(ProxySupportParams {
-            resolver,
             system_resolver,
             server_type: self.config.server_type.clone(),
             server_addr: self.config.addr.clone(),
             upstream_type: self.config.upstream_type.clone(),
-            upstream_addr,
             dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
-            traffic_data_sender,
+            stats_sender,
         });
 
         loop {
             match proxy_listener.accept().await {
                 Ok((inbound_stream, addr)) => {
                     let psp = psp.clone();
-                    let prefer_upstream = inner_state!(self, prefer_upstream).clone();
+                    let (prefer_upstream, upstream, dns_resolver) =
+                        copy_inner_state!(self, prefer_upstream, upstream, dns_resolver);
                     tokio::spawn(async move {
-                        Self::process_stream(inbound_stream, psp, prefer_upstream)
-                            .await
-                            .map_err(|e| match e {
-                                ProxyError::BadRequest | ProxyError::BadGateway(_) => {
-                                    error!("{:?}", e);
-                                }
-                                _ => {}
-                            })
-                            .ok();
+                        Self::process_stream(
+                            inbound_stream,
+                            psp,
+                            upstream,
+                            prefer_upstream,
+                            dns_resolver.unwrap(),
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            ProxyError::BadRequest | ProxyError::BadGateway(_) => {
+                                error!("{:?}", e);
+                            }
+                            _ => {}
+                        })
+                        .ok();
                         debug!("connection closed: {addr}");
                     });
                 }
@@ -345,6 +373,20 @@ impl Server {
                 }
             }
         }
+    }
+
+    async fn create_dns_resolver(dot_server: &str, name_servers: &str) -> Arc<DNSResolver> {
+        Arc::new(
+            rs_utilities::dns::resolver(
+                dot_server,
+                name_servers
+                    .split(',')
+                    .skip_while(|&x| x.is_empty())
+                    .map(|e| e.trim().to_string())
+                    .collect(),
+            )
+            .await,
+        )
     }
 
     fn create_proxy_handler(
@@ -382,7 +424,9 @@ impl Server {
     async fn process_stream(
         mut inbound_stream: TcpStream,
         params: Arc<ProxySupportParams>,
+        upstream: Option<SocketAddr>,
         prefer_upstream: bool,
+        resolver: Arc<DNSResolver>,
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
@@ -422,7 +466,7 @@ impl Server {
             let mut outbound_type = OutboundType::Direct;
             let mut outbound_stream = None;
 
-            if params.upstream_addr.is_some()
+            if upstream.is_some()
                 && ((addr.is_domain() && !addr.is_internal_domain())
                     || (addr.is_ip() && !addr.is_internal_ip()))
             {
@@ -443,16 +487,15 @@ impl Server {
 
                     debug!(
                         "forward payload to next proxy({:?}), {addr} -> {:?}",
-                        outbound_type, params.upstream_addr
+                        outbound_type, upstream
                     );
 
-                    outbound_stream = match TcpStream::connect(params.upstream_addr.unwrap()).await
-                    {
+                    outbound_stream = match TcpStream::connect(upstream.unwrap()).await {
                         Ok(stream) => Some(stream),
                         Err(e) => {
                             error!(
                                 "failed to connect to upstream: {}, err: {e}",
-                                params.upstream_addr.unwrap()
+                                upstream.unwrap()
                             );
                             None
                         }
@@ -467,7 +510,7 @@ impl Server {
                         let resolver = if addr.is_internal_domain() {
                             &params.system_resolver
                         } else {
-                            &params.resolver
+                            &resolver
                         };
 
                         let ip_arr = resolver.lookup(domain.as_str()).await.map_err(|e| {
@@ -522,7 +565,7 @@ impl Server {
                     Self::start_stream_transfer(
                         &mut inbound_stream,
                         outbound_stream,
-                        &params.traffic_data_sender,
+                        &params.stats_sender,
                     )
                     .await?;
                 }
@@ -581,39 +624,68 @@ impl Server {
     async fn start_stream_transfer(
         a_stream: &mut TcpStream,
         b_stream: &mut TcpStream,
-        traffic_data_sender: &Sender<ProxyTraffic>,
+        stats_sender: &Sender<ServerStats>,
     ) -> Result<ProxyTraffic, ProxyError> {
-        let (tx_bytes, rx_bytes) = tokio::io::copy_bidirectional(a_stream, b_stream)
-            .map_err(|e| ProxyError::Disconnected(anyhow!(e)))
-            .await?;
+        stats_sender.send(ServerStats::NewConnection).await.ok();
 
-        debug!(
-            "transfer, out:{tx_bytes}, in:{rx_bytes}, {:?} <-> {:?}",
-            a_stream.local_addr(),
-            b_stream.local_addr()
-        );
+        let result = match tokio::io::copy_bidirectional(a_stream, b_stream).await {
+            Ok((tx_bytes, rx_bytes)) => {
+                debug!(
+                    "transfer, out:{tx_bytes}, in:{rx_bytes}, {:?} <-> {:?}",
+                    a_stream.local_addr(),
+                    b_stream.local_addr()
+                );
 
-        traffic_data_sender
-            .send(ProxyTraffic { tx_bytes, rx_bytes })
-            .await
-            .ok();
+                stats_sender
+                    .send(ServerStats::Traffic(ProxyTraffic { tx_bytes, rx_bytes }))
+                    .await
+                    .ok();
 
-        Ok(ProxyTraffic { rx_bytes, tx_bytes })
+                Ok(ProxyTraffic { rx_bytes, tx_bytes })
+            }
+            Err(e) => Err(ProxyError::Disconnected(anyhow!(e))),
+        };
+
+        stats_sender.send(ServerStats::CloseConnection).await.ok();
+        result
     }
 
-    fn collect_and_report_traffic_data(&self, mut traffic_data_receiver: Receiver<ProxyTraffic>) {
+    fn collect_and_report_server_stats(&self, mut stats_receiver: Receiver<ServerStats>) {
         let inner_state = self.inner_state.clone();
         tokio::spawn(async move {
             let mut total_rx_bytes = 0;
             let mut total_tx_bytes = 0;
+            let mut total_connections = 0;
+            let mut ongoing_connections = 0;
             let mut last_elapsed_time = 0;
             let start_time = SystemTime::now();
-            while let Some(ProxyTraffic { rx_bytes, tx_bytes }) = traffic_data_receiver.recv().await
-            {
-                total_rx_bytes += rx_bytes;
-                total_tx_bytes += tx_bytes;
+            loop {
+                match stats_receiver.recv().await {
+                    Some(ServerStats::NewConnection) => {
+                        ongoing_connections += 1;
+                        total_connections += 1;
+                    }
+
+                    Some(ServerStats::CloseConnection) => {
+                        ongoing_connections -= 1;
+                    }
+
+                    Some(ServerStats::Traffic(ProxyTraffic { rx_bytes, tx_bytes })) => {
+                        total_rx_bytes += rx_bytes;
+                        total_tx_bytes += tx_bytes;
+                    }
+                    None => break,
+                }
 
                 if let Ok(elpased) = start_time.elapsed() {
+                    {
+                        let mut st = inner_state.lock().unwrap();
+                        st.total_rx_bytes = total_rx_bytes;
+                        st.total_tx_bytes = total_tx_bytes;
+                        st.total_connections = total_connections;
+                        st.ongoing_connections = ongoing_connections;
+                    }
+
                     // report traffic data every 10 seconds
                     let elapsed_time = elpased.as_secs();
                     if elapsed_time - last_elapsed_time > POST_TRAFFIC_DATA_INTERVAL_SECS {
@@ -729,12 +801,6 @@ impl Server {
         }
     }
 
-    fn post_server_log(self: &Arc<Self>, message: &str) {
-        if inner_state!(self, on_info_report_enabled) {
-            inner_state!(self, server_info_bridge).post_server_log(message)
-        }
-    }
-
     pub fn set_on_info_listener(
         self: &Arc<Self>,
         callback: impl FnMut(&str) + 'static + Send + Sync,
@@ -752,14 +818,11 @@ impl Server {
     }
 }
 
+#[async_trait::async_trait]
 impl Api for Server {
     fn set_prefer_upstream(&self, flag: bool) {
         info!("set_prefer_upstream, prefer_upstream: {flag}");
         inner_state!(self, prefer_upstream) = flag
-    }
-
-    fn get_server_config(&self) -> api::ServerConfig {
-        inner_state!(self, transient_server_config).clone()
     }
 
     fn get_server_state(&self) -> api::ServerState {
@@ -767,34 +830,110 @@ impl Api for Server {
             Some(qc) => qc.get_state().to_string(),
             None => "NotConnected".to_string(),
         };
+
         api::ServerState {
             prefer_upstream: inner_state!(self, prefer_upstream),
             tunnel_state,
         }
     }
 
-    fn apply_changes(&self, _server_config: api::ServerConfig) -> Result<()> {
-        // let tunnel_state = match inner_state!(self, quic_client).as_ref() {
-        //     Some(qc) => {
-        //         let mut quic_client_config = qc.get_config();
+    fn get_proxy_server_config(&self) -> ProxyServerConfig {
+        let cfg = &self.config;
 
-        //         let orig_config = inner_state!(self, transient_server_config);
-        //         if server_config != orig_config {}
-        //     }
-        //     None => {}
-        // };
+        let (dot_server, name_servers) = copy_inner_state!(self, dot_server, name_servers);
+
+        if dot_server.is_some() || name_servers.is_some() {
+            ProxyServerConfig {
+                server_addr: cfg.server_addr_as_string(),
+                dot_server: dot_server.unwrap_or("".to_string()),
+                name_servers: name_servers.unwrap_or("".to_string()),
+            }
+        } else {
+            ProxyServerConfig {
+                server_addr: cfg.server_addr_as_string(),
+                dot_server: cfg.dot_server.clone(),
+                name_servers: cfg.name_servers.clone(),
+            }
+        }
+    }
+
+    fn get_quic_tunnel_config(&self) -> QuicTunnelConfig {
+        let quic_server_addr = match inner_state!(self, quic_client) {
+            Some(ref qc) => qc.get_server_addr(),
+            None => "".to_string(),
+        };
+
+        let cfg = &self.common_quic_config;
+        QuicTunnelConfig {
+            upstream_addr: quic_server_addr,
+            cert: cfg.cert.clone(),
+            cipher: cfg.cipher.clone(),
+            password: cfg.password.clone(),
+            idle_timeout: cfg.max_idle_timeout_ms,
+            retry_interval: cfg.retry_interval_ms,
+        }
+    }
+
+    fn get_server_stats(&self) -> api::ServerStats {
+        let (total_rx_bytes, total_tx_bytes, ongoing_connections, total_connections) = copy_inner_state!(
+            self,
+            total_rx_bytes,
+            total_tx_bytes,
+            ongoing_connections,
+            total_connections
+        );
+        api::ServerStats {
+            total_rx_bytes,
+            total_tx_bytes,
+            ongoing_connections,
+            total_connections,
+        }
+    }
+
+    async fn update_proxy_server_config(&self, config: ProxyServerConfig) -> Result<()> {
+        inner_state!(self, dns_resolver) = Some(
+            Self::create_dns_resolver(config.dot_server.as_str(), config.name_servers.as_str())
+                .await,
+        );
+
+        info!(
+            "dns resolver updated, dot_server: [{}], name_servers: [{}]",
+            config.dot_server, config.name_servers
+        );
+
+        inner_state!(self, dot_server) = Some(config.dot_server);
+        inner_state!(self, name_servers) = Some(config.name_servers);
+        Ok(())
+    }
+
+    async fn update_quic_tunnel_config(&self, config: QuicTunnelConfig) -> Result<()> {
+        if let Some(ref qc) = inner_state!(self, quic_client) {
+            qc.stop().ok();
+        }
+
+        let mut base_common_quic_config = self.common_quic_config.clone();
+        base_common_quic_config.cert = config.cert;
+        base_common_quic_config.cipher = config.cipher;
+        base_common_quic_config.password = config.password;
+        base_common_quic_config.max_idle_timeout_ms = config.idle_timeout;
+        base_common_quic_config.retry_interval_ms = config.retry_interval;
+        let upstream_addr = NetAddr::from_str(config.upstream_addr.as_str())?;
+        let quic_client_join_handle = self
+            .start_quic_client(upstream_addr, base_common_quic_config)
+            .await;
+
+        tokio::spawn(async move { quic_client_join_handle.unwrap().await });
+
         Ok(())
     }
 }
 
 struct ProxySupportParams {
-    resolver: Arc<DNSResolver>,
     system_resolver: Arc<DNSResolver>,
     server_type: Option<ProtoType>,
     server_addr: SocketAddr,
     upstream_type: Option<ProtoType>,
-    upstream_addr: Option<SocketAddr>,
     dashboard_addr: Option<SocketAddr>,
     proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
-    traffic_data_sender: Sender<ProxyTraffic>,
+    stats_sender: Sender<ServerStats>,
 }

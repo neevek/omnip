@@ -1,5 +1,4 @@
 use super::{JsonRequest, JsonResponse};
-use crate::api::ServerConfig;
 use crate::Api;
 use anyhow::Result;
 use http::request::Parts;
@@ -54,10 +53,19 @@ lazy_static! {
     };
     static ref REQUEST_HANDLERS_MAP: RequestHandlersMap = {
         let mut map = HashMap::<&'static str, RequestHandler>::new();
-        map.insert("/api/server_state", DashboardService::server_state);
-        map.insert("/api/server_config", DashboardService::server_config);
-        map.insert("/api/prefer_upstream", DashboardService::prefer_upstream);
-        map.insert("/api/apply_changes", DashboardService::apply_changes);
+        map.insert("/api/server_state", AdminServer::server_state);
+        map.insert("/api/prefer_upstream", AdminServer::prefer_upstream);
+        map.insert("/api/proxy_server_config", AdminServer::proxy_server_config);
+        map.insert("/api/quic_tunnel_config", AdminServer::quic_tunnel_config);
+        map.insert(
+            "/api/update_quic_tunnel_config",
+            AdminServer::update_quic_tunnel_config,
+        );
+        map.insert(
+            "/api/update_proxy_server_config",
+            AdminServer::update_proxy_server_config,
+        );
+        map.insert("/api/stats", AdminServer::server_stats);
         map
     };
 }
@@ -77,12 +85,12 @@ impl DashboardServer {
 
     pub async fn bind(&self, addr: SocketAddr) -> Result<TcpListener> {
         let listener = TcpListener::bind(addr).await.map_err(|e| {
-            error!("failed to bind dashboard server on address: {}", addr);
+            error!("failed to bind dashboard server on address: {addr}");
             e
         })?;
 
         let addr = listener.local_addr().unwrap();
-        info!("dashboard server bound to: {}", addr);
+        info!("dashboard server bound to: {addr}");
         Ok(listener)
     }
 
@@ -94,7 +102,7 @@ impl DashboardServer {
                         let api = api.clone();
                         tokio::task::spawn(async move {
                             if let Err(err) = Http::new()
-                                .serve_connection(stream, DashboardService::new(api))
+                                .serve_connection(stream, AdminServer::new(api))
                                 .await
                             {
                                 println!("Failed to serve connection: {:?}", err);
@@ -102,20 +110,20 @@ impl DashboardServer {
                         });
                     }
 
-                    Err(e) => error!("access server failed, err: {}", e),
+                    Err(e) => error!("access server failed, err: {e}"),
                 }
             }
         });
     }
 }
 
-struct DashboardService {
+struct AdminServer {
     api: Arc<dyn Api>,
 }
 
-impl DashboardService {
+impl AdminServer {
     pub fn new(api: Arc<dyn Api>) -> Self {
-        DashboardService { api }
+        AdminServer { api }
     }
 
     async fn handle_request(api: Arc<dyn Api>, req: Request<Body>) -> Option<Response<Body>> {
@@ -173,13 +181,37 @@ impl DashboardService {
         Ok(body)
     }
 
-    fn server_config(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
+    fn proxy_server_config(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
         let body = match head.method {
             http::Method::GET => {
-                Self::convert_resp_to_body(JsonResponse::<crate::api::ServerConfig>::succeed(
-                    Some(api.get_server_config()),
+                Self::convert_resp_to_body(JsonResponse::<crate::api::ProxyServerConfig>::succeed(
+                    Some(api.get_proxy_server_config()),
                 ))?
             }
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
+    fn quic_tunnel_config(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::GET => {
+                Self::convert_resp_to_body(JsonResponse::<crate::api::QuicTunnelConfig>::succeed(
+                    Some(api.get_quic_tunnel_config()),
+                ))?
+            }
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
+    fn server_stats(api: Arc<dyn Api>, head: Parts, _: Bytes) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::GET => Self::convert_resp_to_body(
+                JsonResponse::<crate::api::ServerStats>::succeed(Some(api.get_server_stats())),
+            )?,
             _ => return Err(Self::not_supported()),
         };
 
@@ -199,17 +231,37 @@ impl DashboardService {
         Ok(body)
     }
 
-    fn apply_changes(api: Arc<dyn Api>, head: Parts, body: Bytes) -> Result<Body, JsonResponse> {
+    fn update_proxy_server_config(
+        api: Arc<dyn Api>,
+        head: Parts,
+        body: Bytes,
+    ) -> Result<Body, JsonResponse> {
         let body = match head.method {
             http::Method::POST => {
-                let config = Self::convert_req_to_json::<ServerConfig>(body)?;
-                match api.apply_changes(config.data.unwrap()) {
-                    Ok(res) => {
-                        // TODO handle result
-                        Self::convert_resp_to_body(<JsonResponse>::succeed(None))?
-                    }
-                    _ => Self::convert_resp_to_body(<JsonResponse>::succeed(None))?,
-                }
+                let req = Self::convert_req_to_json::<crate::api::ProxyServerConfig>(body)?;
+                tokio::spawn(async move {
+                    api.update_proxy_server_config(req.data.unwrap()).await.ok();
+                });
+                Self::convert_resp_to_body(<JsonResponse>::succeed(None))?
+            }
+            _ => return Err(Self::not_supported()),
+        };
+
+        Ok(body)
+    }
+
+    fn update_quic_tunnel_config(
+        api: Arc<dyn Api>,
+        head: Parts,
+        body: Bytes,
+    ) -> Result<Body, JsonResponse> {
+        let body = match head.method {
+            http::Method::POST => {
+                let req = Self::convert_req_to_json::<crate::api::QuicTunnelConfig>(body)?;
+                tokio::spawn(async move {
+                    api.update_quic_tunnel_config(req.data.unwrap()).await.ok();
+                });
+                Self::convert_resp_to_body(<JsonResponse>::succeed(None))?
             }
             _ => return Err(Self::not_supported()),
         };
@@ -218,7 +270,7 @@ impl DashboardService {
     }
 }
 
-impl Service<Request<Body>> for DashboardService {
+impl Service<Request<Body>> for AdminServer {
     type Response = Response<Body>;
     type Error = hyper::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;

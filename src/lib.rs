@@ -1,5 +1,5 @@
+mod admin;
 mod api;
-mod dashboard;
 mod http;
 mod proxy_handler;
 mod proxy_rule_manager;
@@ -9,6 +9,7 @@ mod server_info_bridge;
 mod socks;
 mod utils;
 
+use anyhow::Context;
 use anyhow::{bail, Result};
 pub use api::Api;
 use byte_pool::{Block, BytePool};
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub use server::Server;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::str::FromStr;
 use url::Url;
 
 const INTERNAL_DOMAIN_SURRFIX: [&'static str; 6] = [
@@ -163,6 +165,24 @@ impl NetAddr {
 impl std::fmt::Display for NetAddr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         formatter.write_fmt(format_args!("{}:{}", self.host, self.port))
+    }
+}
+
+impl FromStr for NetAddr {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let colon_pos = s.rfind(":").context("port required")?;
+        let port = s[(colon_pos + 1)..]
+            .parse::<u16>()
+            .context("invalid port")?;
+
+        if let Some(pos) = s.rfind("]") {
+            if pos + 1 != colon_pos {
+                bail!("invalid ipv6 address: {s}");
+            }
+        }
+
+        Ok(NetAddr::new(&s[..colon_pos], port))
     }
 }
 

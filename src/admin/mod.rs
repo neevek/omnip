@@ -1,4 +1,4 @@
-pub(crate) mod dashboard_server;
+pub(crate) mod admin_server;
 use serde::{Deserialize, Serialize};
 
 #[serde_with::skip_serializing_none]

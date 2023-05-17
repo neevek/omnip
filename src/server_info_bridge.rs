@@ -9,6 +9,13 @@ pub(crate) struct ProxyTraffic {
 }
 
 #[derive(Serialize)]
+pub(crate) enum ServerStats {
+    NewConnection,
+    CloseConnection,
+    Traffic(ProxyTraffic),
+}
+
+#[derive(Serialize)]
 pub(crate) enum ServerInfoType {
     ProxyDNSResolverType,
     ProxyServerState,

@@ -1,7 +1,13 @@
-import { useState, BaseSyntheticEvent, useEffect } from 'react'
-import { Paper, ToggleButtonGroup, ToggleButton, Button, Typography, FormControl, MenuItem, TextField, Stack, Container } from '@mui/material'
+import { useState, SyntheticEvent } from 'react'
+import { Box, Tab, Typography } from '@mui/material'
+import TabContext from '@mui/lab/TabContext';
+import TabList from '@mui/lab/TabList';
+import TabPanel from '@mui/lab/TabPanel';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import ProxyServer from './ProxyServer'
+import QuicTunnel from './QuicTunnel'
+import Stats from './Stats'
 import './App.css'
 
 const darkTheme = createTheme({
@@ -17,131 +23,30 @@ const darkTheme = createTheme({
 });
 
 function App() {
-  const [proxyAddr, setProxyAddr] = useState("");
-  const [upstream, setUpstream] = useState("");
-  const [password, setPassword] = useState("");
-  const [certPath, setCertPath] = useState("");
-  const [idleTimeout, setIdleTimeout] = useState(120000);
-  const [retryInterval, setRetryInterval] = useState(5000);
-  const [cipher, setCipher] = useState("");
-  const [dotServer, setDotServer] = useState("");
-  const [nameServers, setNameServers] = useState("");
-  const [globalProxy, setGlobalProxy] = useState(false)
-  const [tunnelState, setTunnelState] = useState("NotConnected")
-  const [logMessages, setLogMessages] = useState("")
-  // const [startButtonDisabled, setStartButtonDisabled] = useState(false)
-  // const [stopButtonDisabled, _setStopButtonDisabled] = useState(false)
-
-  const handleApplyChanges = (event: BaseSyntheticEvent) => {
-    console.log(event.target);
-    // setStartButtonDisabled(true);
+  const [value, setValue] = useState('1');
+  const handleChange = (_event: SyntheticEvent, newValue: string) => {
+    setValue(newValue);
   };
-
-  const fetchData = async (url: string) => {
-    try {
-      const resp = await fetch(url);
-      const json = await resp.json();
-      return json.data;
-    } catch (err) {
-      console.log("failed to fetch data from url: " + url);
-    }
-  }
-
-  const handleChangeProxyMode = async (
-    _event: React.MouseEvent<HTMLElement>,
-    mode: boolean,
-  ) => {
-    if (mode != null) {
-      setGlobalProxy(mode);
-      const requestOptions = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: mode })
-      };
-      await fetch("/api/prefer_upstream", requestOptions);
-    }
-  };
-
-  useEffect(() => {
-    const update = async () => {
-      const serverState = await fetchData("/api/server_state");
-      if (serverState) {
-        setGlobalProxy(serverState.prefer_upstream);
-        setTunnelState(serverState.tunnel_state);
-        setLogMessages(serverState.log_messages);
-      }
-
-      const serverConfig = await fetchData("/api/server_config");
-      if (serverConfig) {
-        setProxyAddr(serverConfig.server_addr);
-        setUpstream(serverConfig.upstream_addr);
-        setPassword(serverConfig.password);
-        setCertPath(serverConfig.cert_path);
-        setIdleTimeout(serverConfig.idle_timeout);
-        setRetryInterval(serverConfig.retry_interval);
-        setCipher(serverConfig.cipher);
-        setDotServer(serverConfig.dot_server);
-        setNameServers(serverConfig.name_servers);
-      }
-    };
-
-    const interval = setInterval(() => {
-      update();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [])
 
   return (
-    <ThemeProvider theme={darkTheme}>
-      <CssBaseline />
-      <Typography variant="h3" align='center'>rsproxy</Typography>
-      <Container maxWidth="sm">
-        <FormControl sx={{ mt: 2, minWidth: "100%" }} >
-          <Stack spacing="0.5rem">
-            <TextField id="proxy-addr" label="Proxy Address" variant="filled" value={proxyAddr} disabled />
-            <TextField id="upstream" label="Upstream" variant="filled" value={upstream} onChange={(e) => setUpstream(e.target.value)} />
-            <TextField id="password" label="Password" type='password' variant="filled" value={password} onChange={(e) => setPassword(e.target.value)}/>
-            <TextField id="cert-path" label="Path to SSL Certificate" variant="filled" value={certPath} onChange={(e) => setCertPath(e.target.value)}/>
-            <TextField id="idle-timeout" label="Idle Timeout (ms)" type='number' variant="filled" value={idleTimeout} onChange={(e) => setIdleTimeout(parseInt(e.target.value))}/>
-            <TextField id="retry-interval" label="Retry Interval (ms)" type='number' variant="filled" value={retryInterval} onChange={(e) => setRetryInterval(parseInt(e.target.value))}/>
-
-            <TextField
-              value={cipher}
-              label="Cipher"
-              select
-              onChange={(e) => setDotServer(e.target.value)} 
-              size='small'
-            >
-              <MenuItem value="chacha20-poly1305">chacha20-poly1305</MenuItem>
-              <MenuItem value="aes-256-gcm">aes-256-gcm</MenuItem>
-              <MenuItem value="aes-128-gcm">aes-128-gcm</MenuItem>
-            </TextField>
-
-            <TextField id="dot-server" label="DoT Server" variant="filled" value={dotServer} onChange={(e) => setDotServer(e.target.value)} />
-            <TextField id="name-servers" label="Name Servers" variant="filled" value={nameServers} onChange={(e) => setNameServers(e.target.value)} />
-
-            <ToggleButtonGroup
-              color="primary"
-              value={globalProxy}
-              onChange={handleChangeProxyMode}
-              exclusive
-              size='small'
-              fullWidth
-            >
-              <ToggleButton value={false}>Smart Proxy</ToggleButton>
-              <ToggleButton value={true}>Global Proxy</ToggleButton>
-            </ToggleButtonGroup>
-
-              <Button variant="outlined" onClick={handleApplyChanges} fullWidth>Apply Changes</Button>
-
-            <Paper elevation={6} style={{ padding: 12 }}>{tunnelState}</Paper>
-            <Paper elevation={6} style={{ padding: 12, color: "#0f0" }}>{logMessages}</Paper>
-
-          </Stack>
-        </FormControl>
-      </Container>
-    </ThemeProvider>
+  <ThemeProvider theme={darkTheme}>
+   <CssBaseline />
+   <Typography variant="h3" align='center'>rsproxy</Typography>
+    <Box sx={{ width: '100%', typography: 'body1' }}>
+      <TabContext value={value}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <TabList onChange={handleChange} centered>
+            <Tab label="Proxy Server" value="1" />
+            <Tab label="QUIC Tunnel" value="2" />
+            <Tab label="Stats" value="3" />
+          </TabList>
+        </Box>
+        <TabPanel value="1"><ProxyServer /></TabPanel>
+        <TabPanel value="2"><QuicTunnel /></TabPanel>
+        <TabPanel value="3"><Stats /></TabPanel>
+      </TabContext>
+    </Box>
+  </ThemeProvider>
   )
 }
 
