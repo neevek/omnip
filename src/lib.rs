@@ -615,39 +615,6 @@ pub mod android {
         server.set_enable_on_info_report(bool_enable);
     }
 
-    #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetPreferUpstream(
-        env: JNIEnv,
-        jobj: JClass,
-        server_ptr: jlong,
-        prefer_upstream: jboolean,
-    ) {
-        if server_ptr == 0 {
-            return;
-        }
-
-        let server = &mut *(server_ptr as *mut Arc<Server>);
-        server.set_prefer_upstream(prefer_upstream == 1);
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeIsPreferUpstream(
-        env: JNIEnv,
-        jobj: JClass,
-        server_ptr: jlong,
-    ) -> jboolean {
-        if server_ptr == 0 {
-            return 0u8;
-        }
-
-        let server = &mut *(server_ptr as *mut Arc<Server>);
-        if server.is_prefer_upstream() {
-            1u8
-        } else {
-            0u8
-        }
-    }
-
     fn get_string(env: &JNIEnv, jstring: &JString) -> String {
         if !jstring.is_null() {
             env.get_string(*jstring).unwrap().into()

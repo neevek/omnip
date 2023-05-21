@@ -267,17 +267,6 @@ impl Server {
         inner_state!(self, upstream) = access_server_addr;
         inner_state!(self, quic_client) = Some(Arc::new(client));
 
-        #[cfg(target_os = "android")]
-        {
-            self.post_server_info(ServerInfo::new(
-                ServerInfoType::ProxyMessage,
-                Box::new(format!(
-                    "Tunnel access server bound to: {}",
-                    proxy_upstream_addr.unwrap()
-                )),
-            ));
-        }
-
         Ok(join_handle)
     }
 
