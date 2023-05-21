@@ -50,7 +50,7 @@ function ProxyServer() {
     <FormControl sx={{ mt: 1, minWidth: "100%" }} >
       <Stack spacing="0.5rem">
         <TextField id="proxy-addr" label="Proxy Address" variant="filled" value={proxyAddr} disabled helperText="e.g. http://0.0.0.0:8080, socks5://0.0.0.0:8080, or leave out the protocol to support both HTTP and SOCKS proxy" />
-        <TextField id="dot-server" label="DoT Server" variant="filled" value={dotServer} onChange={(e) => setDotServer(e.target.value)} helperText="e.g. google.dns, dot.pub" />
+        <TextField id="dot-server" label="DoT Server" variant="filled" value={dotServer} onChange={(e) => setDotServer(e.target.value)} helperText="e.g. dns.google, dot.pub" />
         <TextField id="name-servers" label="Name Servers" variant="filled" value={nameServers} onChange={(e) => setNameServers(e.target.value)} helperText="e.g. 8.8.8.8,1.1.1.1" />
 
         <ToggleButtonGroup

@@ -23,7 +23,10 @@ Features
     * ||example.com
     * ...
 6. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
+7. Simple Web UI can be accessed from the same port of the proxy server, DNS servers and tunnel connection can be configured through the Web UI.
 
+![rsproxy](https://github.com/neevek/rsproxy/raw/master/rsproxy1.jpg)
+![rsproxy](https://github.com/neevek/rsproxy/raw/master/rsproxy2.jpg)
 
 ```
 USAGE:
