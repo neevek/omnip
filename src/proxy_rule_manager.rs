@@ -27,6 +27,15 @@ pub struct MatchResult {
     pub needs_sort_rules: bool,
 }
 
+impl From<(bool, bool)> for MatchResult {
+    fn from(value: (bool, bool)) -> Self {
+        MatchResult {
+            matched: value.0,
+            needs_sort_rules: value.1,
+        }
+    }
+}
+
 impl ProxyRule {
     pub fn new(str_rule: &str, fn_matches: FnMatch) -> Self {
         ProxyRule {
@@ -205,34 +214,22 @@ impl ProxyRuleManager {
     }
 
     fn has_rule(rules: &Vec<ProxyRule>, rule: &str) -> bool {
-        for r in rules {
-            if r.is_same_rule(rule) {
-                return true;
-            }
-        }
-        false
+        rules.iter().any(|r| r.is_same_rule(rule))
     }
 
     fn do_match(rules: &[ProxyRule], host: &str, port: u16) -> MatchResult {
-        let mut needs_sort_rules = false;
-        let mut matched = false;
-        for (index, rule) in rules.iter().enumerate() {
-            if rule.matches(host, port) {
-                matched = true;
-                if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
-                    && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
-                {
-                    needs_sort_rules = true;
-                }
-
-                break;
-            }
-        }
-
-        MatchResult {
-            matched,
-            needs_sort_rules,
-        }
+        rules
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.matches(host, port))
+            .map_or((false, false).into(), |(index, rule)| {
+                (
+                    true,
+                    index >= SORT_MATCH_RULES_INDEX_THRESHOLD
+                        && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD,
+                )
+                    .into()
+            })
     }
 }
 
