@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "rsproxy"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "android_logger 0.10.1",
  "anyhow",
@@ -1287,8 +1287,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.4.4"
-source = "git+https://github.com/neevek/rstun#e80282651b36d19ab61d66a36198c6f022bee45f"
+version = "0.4.5"
+source = "git+https://github.com/neevek/rstun#41191d26e1ae4b381772207267060e29a33c7915"
 dependencies = [
  "android_logger 0.11.1",
  "anyhow",
