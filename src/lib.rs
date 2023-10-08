@@ -453,7 +453,7 @@ pub mod android {
     use jni::sys::{jlong, jstring};
 
     use self::jni::objects::{JClass, JString};
-    use self::jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
+    use self::jni::sys::{jboolean, jint, JNI_TRUE};
     use self::jni::JNIEnv;
     use super::*;
     use log::error;
@@ -466,11 +466,20 @@ pub mod android {
         _: JClass,
         jlogLevel: JString,
     ) -> jboolean {
-        if let Ok(log_level) = env.get_string(jlogLevel) {
-            rs_utilities::LogHelper::init_logger("rsp", log_level.to_str().unwrap());
-            return JNI_TRUE;
-        }
-        JNI_FALSE
+        let log_level = match get_string(&env, &jlogLevel).as_str() {
+            "T" => "trace",
+            "D" => "debug",
+            "I" => "info",
+            "W" => "warn",
+            "E" => "error",
+            _ => "info",
+        };
+        let log_filter = format!(
+            "rsproxy={},rstun={},rs_utilities={}",
+            log_level, log_level, log_level
+        );
+        rs_utilities::LogHelper::init_logger("rsp", log_filter.as_str());
+        return JNI_TRUE;
     }
 
     #[no_mangle]

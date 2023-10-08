@@ -1,14 +1,15 @@
 [package]
 name = "rsproxy"
-version = "0.4.8"
+version = "0.4.9"
 edition = "2021"
+
 [lib]
 crate-type = ["dylib", "lib"]
 
 [dependencies]
-clap = { version = "3.0.7", features = ["derive"] }
+clap = { version = "4.4", features = ["derive"] }
 tokio = { version = "1.16", features = ["full"] }
-pretty_env_logger = "0.4.0"
+pretty_env_logger = "0.5"
 log = "0.4.14"
 chrono = "0.4.19"
 anyhow = "1.0.44"
@@ -17,8 +18,8 @@ pin-utils = "0.1.0"
 num_cpus = "1.13.1"
 url = "2.3"
 regex = "1.5"
-notify = "5.0"
-rs-utilities = "0.3.5"
+notify = "6.0"
+rs-utilities = "0.3.8"
 # rs-utilities = { path = "../rs-utilities" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -35,15 +36,15 @@ mime_guess = "2.0"
 
 [dev-dependencies]
 jni = "0.19"
-android_logger = "0.10"
+android_logger = "0.13"
 
 [target.aarch64-linux-android.dependencies]
 jni = "0.19"
-android_logger = "0.10"
+android_logger = "0.13"
 
 [target.armv7-linux-androideabi.dependencies]
 jni = "0.19"
-android_logger = "0.10"
+android_logger = "0.13"
 
 
 ######### build shared lib for android ###########
@@ -52,5 +53,5 @@ android_logger = "0.10"
 [profile.release]
 opt-level = "z"
 strip = true
-# panic = "abort"
-lto = "fat"
+lto ="fat" 
+panic = "abort"
