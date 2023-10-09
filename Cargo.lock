@@ -1326,9 +1326,9 @@ dependencies = [
 
 [[package]]
 name = "rs-utilities"
-version = "0.3.8"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3553b0f1ed4ba6c3765936e67eca109e6706763db3fc7a69d8fa4097957a10"
+checksum = "2e0b59825beb0a196edd58b00d055e3859c231bb2c331100430a8db9f4a55f86"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "rsproxy"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1376,8 +1376,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.4.7"
-source = "git+https://github.com/neevek/rstun#b3660a1b91f6f520657044d3ed88be35df7ec8fe"
+version = "0.4.8"
+source = "git+https://github.com/neevek/rstun#2d74020e6c8c0973589268d9f7954ab756cea391"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1399,6 +1399,7 @@ dependencies = [
  "ring 0.17.2",
  "rs-utilities",
  "rustls",
+ "rustls-pemfile",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
