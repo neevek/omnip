@@ -67,13 +67,13 @@ struct RsproxyArgs {
     name_servers: String,
 
     /// Applicable only for +quic protocols
-    /// Path to the certificate file in DER format, if empty, a self-signed certificate
+    /// Path to the certificate file, if empty, a self-signed certificate
     /// with the domain "localhost" will be used
     #[arg(short = 'c', long, default_value = "")]
     cert: String,
 
     /// Applicable only for +quic protocols
-    /// Path to the key file in DER format, can be empty if no cert is provided
+    /// Path to the key file, can be empty if no cert is provided
     #[arg(short = 'k', long, default_value = "")]
     key: String,
 

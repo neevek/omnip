@@ -56,11 +56,11 @@ OPTIONS:
             dot_server is specified, or system default if empty [default: ]
 
     -c, --cert <CERT>
-            Applicable only for +quic protocols Path to the certificate file in DER format, if
+            Applicable only for +quic protocols Path to the certificate file, if
             empty, a self-signed certificate with the domain "localhost" will be used [default: ]
 
     -k, --key <KEY>
-            Applicable only for +quic protocols Path to the key file in DER format, can be empty if
+            Applicable only for +quic protocols Path to the key file, can be empty if
             no cert is provided [default: ]
 
     -p, --password <PASSWORD>
