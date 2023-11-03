@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::{net::SocketAddr, pin::Pin};
 use tokio::net::TcpListener;
 
-static STATIC_RESOURCE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rsproxy-web.blob"));
+static STATIC_RESOURCE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/omnip-web.blob"));
 const WEB_PREFIX: &'static str = "/web";
 const HEADER_KEY_CONTENT_TYPE: &'static str = "Content-Type";
 const CONTENT_TYPE_JSON: &'static str = "application/json";
@@ -33,7 +33,7 @@ type StaticResourceMap = HashMap<&'static str, StaticResourceItem>;
 lazy_static! {
     static ref STATIC_RESOURCE_ITEM_MAPPING: StaticResourceMap = {
         const WEB_SOURCE_CODE_INDEX: &str =
-            include_str!(concat!(env!("OUT_DIR"), "/rsproxy-web.idx"));
+            include_str!(concat!(env!("OUT_DIR"), "/omnip-web.idx"));
 
         let mut map = HashMap::new();
         for line in WEB_SOURCE_CODE_INDEX.lines() {

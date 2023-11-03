@@ -1,4 +1,4 @@
-rsproxy - HTTP / SOCKS over QUIC
+omnip - HTTP / SOCKS over QUIC
 =======
 
 An all in one proxy implementation written in Rust.
@@ -11,11 +11,11 @@ Features
 3. Proxy chaining with the `--upstream` option. e.g. `--upstream http://ip:port` or `--upstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
 4. Proxy over [QUIC](https://quicwg.org/), i.e. `http+quic`, `socks5+quic` and `socks4+quic`. For example:
     * Start a QUIC server backed by an HTTP proxy on a remote server (HTTP proxy over QUIC):
-      * `rsproxy -a http+quic://0.0.0.0:3515`
+      * `omnip -a http+quic://0.0.0.0:3515`
     * Start a local SOCKS5 proxy and forward all its traffic to the HTTP proxy server through QUIC tunnel (everything is encrypted):
-      * `rsproxy -a socks5://127.0.0.1:9000 --upstream http+quic://DOMAIN:3515`
+      * `omnip -a socks5://127.0.0.1:9000 --upstream http+quic://DOMAIN:3515`
 
-    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which rsproxy uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
+    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which omnip uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
 
 5. Supports simple proxy rules, traffic will be relayed to upstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
     * example.com
@@ -25,12 +25,12 @@ Features
 6. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
 7. Simple Web UI can be accessed from the same port of the proxy server, DNS servers and tunnel connection can be configured through the Web UI.
 
-![rsproxy](https://github.com/neevek/rsproxy/raw/master/rsproxy1.jpg)
-![rsproxy](https://github.com/neevek/rsproxy/raw/master/rsproxy2.jpg)
+![omnip](https://github.com/neevek/omnip/raw/master/omnip1.jpg)
+![omnip](https://github.com/neevek/omnip/raw/master/omnip2.jpg)
 
 ```
 USAGE:
-    rsproxy [OPTIONS] --addr <ADDR>
+    omnip [OPTIONS] --addr <ADDR>
 
 OPTIONS:
     -a, --addr <ADDR>

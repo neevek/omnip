@@ -1,6 +1,6 @@
 #!/bin/bash
 
-pushd src/rsproxy-web
+pushd src/omnip-web
 npm run build
 popd
-cargo build
+cargo build --release

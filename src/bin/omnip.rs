@@ -1,17 +1,17 @@
 use anyhow::Result;
 use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};
-use rsproxy::*;
+use omnip::*;
 
 extern crate pretty_env_logger;
 
 fn main() -> Result<()> {
-    let args = RsproxyArgs::parse();
+    let args = OmnipArgs::parse();
     let log_filter = format!(
-        "rsproxy={},rstun={},rs_utilities={}",
+        "omnip={},rstun={},rs_utilities={}",
         args.loglevel, args.loglevel, args.loglevel
     );
-    rs_utilities::LogHelper::init_logger("rsp", log_filter.as_str());
+    rs_utilities::LogHelper::init_logger("omnip", log_filter.as_str());
 
     let config = create_config(
         args.addr,
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct RsproxyArgs {
+struct OmnipArgs {
     /// Server address [<http|socks5|socks4|http+quic|socks5+quic|socks4+quic>://][ip:]port
     /// for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
     #[arg(short = 'a', long, required = true)]

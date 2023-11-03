@@ -13,10 +13,10 @@ use url::Url;
 
 use super::{INITIAL_HTTP_HEADER_SIZE, MAX_HTTP_HEADER_SIZE};
 
-const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: rsp\r\n\r\n";
-const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: rsp\r\n\r\n";
+const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: omnip\r\n\r\n";
+const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\nServer: omnip\r\n\r\n";
+const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: omnip\r\n\r\n";
+const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: omnip\r\n\r\n";
 
 pub struct HttpProxyHandler<'a> {
     http_request: Option<HttpRequest<'a>>,

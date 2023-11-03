@@ -31,7 +31,7 @@ function App() {
   return (
   <ThemeProvider theme={darkTheme}>
    <CssBaseline />
-   <Typography variant="h3" align='center'>rsproxy</Typography>
+   <Typography variant="h3" align='center'>Omnip</Typography>
     <Box sx={{ width: '100%', typography: 'body1' }}>
       <TabContext value={value}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>

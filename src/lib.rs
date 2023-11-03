@@ -461,7 +461,7 @@ pub mod android {
     use std::thread;
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeInitLogger(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeInitLogger(
         env: JNIEnv,
         _: JClass,
         jlogLevel: JString,
@@ -475,15 +475,15 @@ pub mod android {
             _ => "info",
         };
         let log_filter = format!(
-            "rsproxy={},rstun={},rs_utilities={}",
+            "omnip={},rstun={},rs_utilities={}",
             log_level, log_level, log_level
         );
-        rs_utilities::LogHelper::init_logger("rsp", log_filter.as_str());
+        rs_utilities::LogHelper::init_logger("omnip", log_filter.as_str());
         return JNI_TRUE;
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeCreate(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeCreate(
         env: JNIEnv,
         _: JClass,
         jaddr: JString,
@@ -543,7 +543,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStart(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeStart(
         _env: JNIEnv,
         _: JClass,
         server_ptr: jlong,
@@ -565,7 +565,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeGetState(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeGetState(
         env: JNIEnv,
         _: JClass,
         server_ptr: jlong,
@@ -581,7 +581,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeStop(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeStop(
         _env: JNIEnv,
         _: JClass,
         server_ptr: jlong,
@@ -592,7 +592,7 @@ pub mod android {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn Java_net_neevek_rsproxy_RsProxy_nativeSetEnableOnInfoReport(
+    pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeSetEnableOnInfoReport(
         env: JNIEnv,
         jobj: JClass,
         server_ptr: jlong,
