@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1415,7 +1415,7 @@ dependencies = [
 [[package]]
 name = "rstun"
 version = "0.4.9"
-source = "git+https://github.com/neevek/rstun#a5b61fab16a3d8ef34eb1509adfdd193b9343802"
+source = "git+https://github.com/neevek/rstun#a98ece67be8f115394adb28b2ba3ff31e5ccc7c1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1515,7 +1515,7 @@ dependencies = [
 [[package]]
 name = "rustls-platform-verifier"
 version = "0.1.0"
-source = "git+https://github.com/rustls/rustls-platform-verifier#b83fe221a031ff02068ecc6a82bc7b2544a7b983"
+source = "git+https://github.com/rustls/rustls-platform-verifier#e4194174f2b4b235ed13fc057ce89b19894321e6"
 dependencies = [
  "core-foundation",
  "core-foundation-sys",
