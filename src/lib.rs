@@ -22,7 +22,7 @@ use rs_utilities::log_and_bail;
 use serde::{Deserialize, Serialize};
 pub use server::Server;
 use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use url::Url;
 
@@ -305,8 +305,12 @@ impl Config {
     }
 }
 
-pub fn local_ipv4_socket_addr_with_unspecified_port() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+pub fn local_socket_addr_with_unspecified_port(ipv6: bool) -> SocketAddr {
+    if ipv6 {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)
+    } else {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+    }
 }
 
 pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {

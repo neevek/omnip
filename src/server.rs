@@ -8,8 +8,9 @@ use crate::server_info_bridge::{
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
 use crate::{
-    utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError, ProxyRuleManager,
-    QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
+    local_socket_addr_with_unspecified_port, utils, CommonQuicConfig, Config, Host, NetAddr,
+    ProtoType, ProxyError, ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer,
+    QuicServerConfig,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info};
@@ -20,7 +21,7 @@ use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
 use std::fmt::Display;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::str::{self, FromStr};
 use std::sync::{Arc, Mutex, RwLock};
@@ -145,7 +146,7 @@ impl Server {
                 self.set_and_post_server_state(ServerState::Preparing);
 
                 // start the dashboard server
-                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+                let addr = local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6());
                 let dashboard_server = DashboardServer::new();
                 let dashboard_listener = dashboard_server.bind(addr).await?;
                 let dashboard_addr = dashboard_listener.local_addr().ok();
@@ -174,7 +175,7 @@ impl Server {
 
                 let orig_server_addr = self.config.addr;
                 let proxy_server_addr = if require_quic_server {
-                    crate::local_ipv4_socket_addr_with_unspecified_port()
+                    local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6())
                 } else {
                     orig_server_addr
                 };
@@ -241,7 +242,9 @@ impl Server {
         // with +quic protocols, quic_client will be used to connect to the upstream
         let quic_client_config = QuicClientConfig {
             server_addr: quic_server_addr,
-            local_access_server_addr: crate::local_ipv4_socket_addr_with_unspecified_port(),
+            local_access_server_addr: local_socket_addr_with_unspecified_port(
+                self.config.addr.is_ipv6(),
+            ),
             common_cfg: common_quic_config,
         };
 
