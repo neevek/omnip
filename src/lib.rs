@@ -76,7 +76,7 @@ pub struct NetAddr {
 impl NetAddr {
     pub fn new(host: &str, port: u16) -> Self {
         // IPv6 assumed if square brackets are found
-        let host = if host.find('[').is_some() && host.find(']').is_some() {
+        let host = if host.find('[').is_some() && host.rfind(']').is_some() {
             &host[1..(host.len() - 1)]
         } else {
             host
@@ -164,7 +164,12 @@ impl NetAddr {
 
 impl std::fmt::Display for NetAddr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        formatter.write_fmt(format_args!("{}:{}", self.host, self.port))
+        match self.host {
+            Host::IP(ip) if ip.is_ipv6() => {
+                formatter.write_fmt(format_args!("[{}]:{}", self.host, self.port))
+            }
+            _ => formatter.write_fmt(format_args!("{}:{}", self.host, self.port)),
+        }
     }
 }
 
