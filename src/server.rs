@@ -16,7 +16,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info};
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use rs_utilities::dns::{DNSResolver, DNSResolverType};
+use rs_utilities::dns::{
+    DNSQueryOrdering, DNSResolver, DNSResolverConfig, DNSResolverLookupIpStrategy, DNSResolverType,
+};
 use rs_utilities::log_and_bail;
 use serde::Serialize;
 use std::borrow::BorrowMut;
@@ -299,10 +301,12 @@ impl Server {
         let system_resolver = if resolver.resolver_type() == DNSResolverType::System {
             resolver.clone()
         } else {
-            Arc::new(rs_utilities::dns::system_resolver(
-                3,
-                rs_utilities::dns::DNSQueryOrdering::UserProvidedOrder,
-            ))
+            let dns_config = DNSResolverConfig {
+                strategy: DNSResolverLookupIpStrategy::Ipv4thenIpv6,
+                num_conccurent_reqs: 3,
+                ordering: DNSQueryOrdering::QueryStatistics,
+            };
+            Arc::new(rs_utilities::dns::system_resolver(dns_config))
         };
 
         let resolver_type = resolver.resolver_type().to_string();
