@@ -340,11 +340,38 @@ impl Server {
 
         loop {
             match proxy_listener.accept().await {
-                Ok((inbound_stream, addr)) => {
+                Ok((mut inbound_stream, addr)) => {
                     let psp = psp.clone();
                     let (prefer_upstream, upstream, dns_resolver) =
                         copy_inner_state!(self, prefer_upstream, upstream, dns_resolver);
                     tokio::spawn(async move {
+                        if let Some(ProtoType::Tcp) = psp.server_type {
+                            if upstream.is_none() {
+                                error!("tcp connection requires an upstream");
+                                return;
+                            }
+
+                            match TcpStream::connect(upstream.unwrap()).await {
+                                Ok(mut outbound_stream) => {
+                                    Self::start_stream_transfer(
+                                        &mut inbound_stream,
+                                        &mut outbound_stream,
+                                        &psp.stats_sender,
+                                    )
+                                    .await
+                                    .ok();
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "failed to connect to upstream: {}, err: {e}",
+                                        upstream.unwrap()
+                                    );
+                                }
+                            };
+
+                            return;
+                        }
+
                         Self::process_stream(
                             inbound_stream,
                             psp,
@@ -360,6 +387,7 @@ impl Server {
                             _ => {}
                         })
                         .ok();
+
                         debug!("connection closed: {addr}");
                     });
                 }
@@ -398,6 +426,7 @@ impl Server {
                 Box::new(SocksProxyHandler::new(SocksVersion::V4, server_addr))
             }
             Some(ProtoType::Http) => Box::new(HttpProxyHandler::new()),
+            Some(ProtoType::Tcp) => unreachable!("not valid proxy type"),
             None => {
                 match first_byte as char {
                     '\x05' => Box::new(SocksProxyHandler::new(SocksVersion::V5, server_addr)),
@@ -479,6 +508,7 @@ impl Server {
                         ProtoType::Http => OutboundType::HttpProxy,
                         ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
                         ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
+                        ProtoType::Tcp => unreachable!("not valid proxy type"),
                     };
 
                     debug!(

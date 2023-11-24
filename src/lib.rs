@@ -197,6 +197,7 @@ pub enum ProtoType {
     Http,
     Socks5,
     Socks4,
+    Tcp,
 }
 
 impl ProtoType {
@@ -213,14 +214,21 @@ impl ProtoType {
                 if combine_layer_proto {
                     "socks5+quic"
                 } else {
-                    "http"
+                    "socks5"
                 }
             }
             ProtoType::Socks4 => {
                 if combine_layer_proto {
                     "socks4+quic"
                 } else {
-                    "http"
+                    "socks4"
+                }
+            }
+            ProtoType::Tcp => {
+                if combine_layer_proto {
+                    "tcp+quic"
+                } else {
+                    "tcp"
                 }
             }
         }
@@ -234,6 +242,7 @@ impl std::fmt::Display for ProtoType {
             ProtoType::Http => "HTTP",
             ProtoType::Socks5 => "SOCKS5",
             ProtoType::Socks4 => "SOCKS4",
+            ProtoType::Tcp => "TCP",
         };
         formatter.write_fmt(format_args!("{}", msg))
     }
@@ -244,6 +253,7 @@ pub enum LayeredProtoType {
     HttpOverQuic,
     Socks5OverQuic,
     Socks4OverQuic,
+    TcpOverQuic,
 }
 
 #[serde_with::skip_serializing_none]
@@ -347,9 +357,11 @@ pub fn parse_server_addr(
         (Some(ProtoType::Http), None, "http"),
         (Some(ProtoType::Socks5), None, "socks5"),
         (Some(ProtoType::Socks4), None, "socks4"),
+        (Some(ProtoType::Tcp), None, "tcp"),
         (Some(ProtoType::Http), Some(LayeredProtoType::HttpOverQuic), "http+quic"),
         (Some(ProtoType::Socks5), Some(LayeredProtoType::Socks5OverQuic), "socks5+quic"),
         (Some(ProtoType::Socks4), Some(LayeredProtoType::Socks4OverQuic), "socks4+quic"),
+        (Some(ProtoType::Tcp), Some(LayeredProtoType::TcpOverQuic), "tcp+quic"),
     ];
 
     let addr = if addr.find("://").is_some() {
