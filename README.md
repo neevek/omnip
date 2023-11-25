@@ -1,5 +1,5 @@
-omnip - HTTP / SOCKS over QUIC
-=======
+omnip - {tcp / http proxy / socks proxy} over quic
+--------
 
 An all in one proxy implementation written in Rust.
 
@@ -8,22 +8,26 @@ Features
 
 1. Supports [HTTP tunneling](https://en.wikipedia.org/wiki/HTTP_tunnel) and basic HTTP proxy.
 2. Supports `CONNECT` command of both [SOCKS5](https://www.rfc-editor.org/rfc/rfc1928) and [SOCKS4](https://www.openssh.com/txt/socks4.protocol) with [SOCKS4a](https://www.openssh.com/txt/socks4a.protocol) extension. In the case of being a node in a proxy chain, the implementation always delays DNS resolution to the next node, only when acting as the last node will it resolve DNS.
-3. Proxy chaining with the `--upstream` option. e.g. `--upstream http://ip:port` or `--upstream socks5://ip:port` to forward payload to another http proxy or SOCKS proxy.
-4. Proxy over [QUIC](https://quicwg.org/), i.e. `http+quic`, `socks5+quic` and `socks4+quic`. For example:
+3. Proxy chaining with the `--upstream` option. e.g. `--upstream http://ip:port` or `--upstream socks5://ip:port` to forward payload to another HTTP proxy or SOCKS proxy.
+4. Proxy over [QUIC](https://quicwg.org/), i.e. `http+quic`, `socks5+quic` and `socks4+quic`, for example:
     * Start a QUIC server backed by an HTTP proxy on a remote server (HTTP proxy over QUIC):
-      * `omnip -a http+quic://0.0.0.0:3515`
-    * Start a local SOCKS5 proxy and forward all its traffic to the HTTP proxy server through QUIC tunnel (everything is encrypted):
-      * `omnip -a socks5://127.0.0.1:9000 --upstream http+quic://DOMAIN:3515`
-
-    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA are recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which omnip uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
-
-5. Supports simple proxy rules, traffic will be relayed to upstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
+      * `omnip -a http+quic://0.0.0.0:3515 -lD`
+    * Start a local SOCKS5 proxy and forward all its payload to the HTTP proxy server through QUIC tunnel (everything is encrypted):
+      * `omnip -a socks5://127.0.0.1:9000 --upstream http+quic://DOMAIN:3515 -lD`
+    Note: The commands above will use auto-generated self-signed certificate for QUIC, which is for demonstration only. Domain name with certificate issued by trusted CA is recommended. For more details, see README of the [rstun](https://github.com/neevek/rstun) project, which omnip uses to implement proxy over QUIC. And remember to set a password for the server with the `-p` or `--password` option.
+5. Supports plain tcp connections over QUIC, which can be used to expose a port of remote server through the QUIC tunnel, for example:
+    * Start a QUIC server that forwards all its payload to the local SSH port:
+      * `omnip -a tcp+quic://0.0.0.0:3515 -upstream tcp://127.0.0.1:22 -lD`
+    * Connect to the tunnel server and SSH into the remote server through the QUIC tunnel:
+      * `omnip -a tcp://0.0.0.0:3721 -upstream tcp+quic://DOMAIN:3515 -lD`
+      * `ssh -p 3721 user@127.0.0.1`
+6. Supports simple proxy rules, traffic will be relayed to upstream if the requested domain matches one of the proxy rules, this is for achieving *Smart Proxy* to control which domains should be forwarded through the tunnel, for example:
     * example.com
     * .example.com
     * ||example.com
     * ...
-6. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
-7. Simple Web UI can be accessed from the same port of the proxy server, DNS servers and tunnel connection can be configured through the Web UI.
+7. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
+8. Simple Web UI can be accessed from the same port of the proxy server, DNS servers and tunnel connection can be configured through the Web UI.
 
 ![omnip](https://github.com/neevek/omnip/raw/master/omnip1.jpg)
 ![omnip](https://github.com/neevek/omnip/raw/master/omnip2.jpg)
@@ -34,12 +38,12 @@ USAGE:
 
 OPTIONS:
     -a, --addr <ADDR>
-            Server address [<http|socks5|socks4|http+quic|socks5+quic|socks4+quic>://][ip:]port for
+            Server address [<tcp|http|socks5|socks4|tcp+quic|http+quic|socks5+quic|socks4+quic>://][ip:]port for
             example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
 
     -u, --upstream <UPSTREAM>
             upstream which the proxy server will relay traffic to based on proxy rules,
-            [<http|socks5|socks4>://]ip:port for example: http://127.0.0.1:8000,
+            [<tcp|http|socks5|socks4>://][ip|domain]:port for example: http://127.0.0.1:8000,
             http+quic://127.0.0.1:8000 [default: ]
 
     -r, --proxy-rules-file <PROXY_RULES_FILE>
