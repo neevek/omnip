@@ -340,7 +340,7 @@ impl Server {
 
         loop {
             match proxy_listener.accept().await {
-                Ok((mut inbound_stream, addr)) => {
+                Ok((inbound_stream, addr)) => {
                     let psp = psp.clone();
                     let (prefer_upstream, upstream, dns_resolver) =
                         copy_inner_state!(self, prefer_upstream, upstream, dns_resolver);
@@ -352,10 +352,10 @@ impl Server {
                             }
 
                             match TcpStream::connect(upstream.unwrap()).await {
-                                Ok(mut outbound_stream) => {
+                                Ok(outbound_stream) => {
                                     Self::start_stream_transfer(
-                                        &mut inbound_stream,
-                                        &mut outbound_stream,
+                                        inbound_stream,
+                                        outbound_stream,
                                         &psp.stats_sender,
                                     )
                                     .await
@@ -583,13 +583,13 @@ impl Server {
             }
 
             match outbound_stream {
-                Some(ref mut outbound_stream) => {
+                Some(mut outbound_stream) => {
                     proxy_handler
-                        .handle(outbound_type, outbound_stream, &mut inbound_stream)
+                        .handle(outbound_type, &mut outbound_stream, &mut inbound_stream)
                         .await?;
 
                     Self::start_stream_transfer(
-                        &mut inbound_stream,
+                        inbound_stream,
                         outbound_stream,
                         &params.stats_sender,
                     )
@@ -648,13 +648,13 @@ impl Server {
     }
 
     async fn start_stream_transfer(
-        a_stream: &mut TcpStream,
-        b_stream: &mut TcpStream,
+        mut a_stream: TcpStream,
+        mut b_stream: TcpStream,
         stats_sender: &Sender<ServerStats>,
     ) -> Result<ProxyTraffic, ProxyError> {
         stats_sender.send(ServerStats::NewConnection).await.ok();
 
-        let result = match tokio::io::copy_bidirectional(a_stream, b_stream).await {
+        let result = match tokio::io::copy_bidirectional(&mut a_stream, &mut b_stream).await {
             Ok((tx_bytes, rx_bytes)) => {
                 debug!(
                     "transfer, out:{tx_bytes}, in:{rx_bytes}, {:?} <-> {:?}",
