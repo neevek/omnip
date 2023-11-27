@@ -40,7 +40,7 @@ fn main() -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct OmnipArgs {
-    /// Server address [<http|socks5|socks4|http+quic|socks5+quic|socks4+quic>://][ip:]port
+    /// Server address [<tcp|http|socks5|socks4|tcp+quic|http+quic|socks5+quic|socks4+quic>://][ip:]port
     /// for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
     #[arg(short = 'a', long, required = true)]
     addr: String,

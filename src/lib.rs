@@ -396,6 +396,11 @@ pub fn parse_server_addr(
         }
     });
 
+    if url.scheme() != "unspecified" && server_type.is_none() {
+        error!("invalid scheme: {}", url.scheme());
+        return (None, None, false);
+    }
+
     (
         server_type,
         Some(NetAddr::new(
