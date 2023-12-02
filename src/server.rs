@@ -145,70 +145,72 @@ impl Server {
             .build()
             .unwrap()
             .block_on(async {
-                self.set_and_post_server_state(ServerState::Preparing);
-
-                // start the dashboard server
-                let addr = local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6());
-                let dashboard_server = DashboardServer::new();
-                let dashboard_listener = dashboard_server.bind(addr).await?;
-                let dashboard_addr = dashboard_listener.local_addr().ok();
-                dashboard_server
-                    .serve_async(dashboard_listener, self.clone())
-                    .await;
-
-                let require_quic_server = self.config.is_layered_proto;
-                let mut quic_client_join_handle = None;
-
-                if let Some(upstream) = &self.config.upstream_addr {
-                    // connect to QUIC server if it is +quic protocols
-                    let require_quic_client = self.config.is_upstream_layered_proto;
-                    if require_quic_client {
-                        quic_client_join_handle = Some(
-                            self.start_quic_client(
-                                upstream.clone(),
-                                self.common_quic_config.clone(),
-                            )
-                            .await?,
-                        );
-                    } else {
-                        inner_state!(self, upstream) = upstream.to_socket_addr();
-                    }
-                }
-
-                let orig_server_addr = self.config.addr;
-                let proxy_server_addr = if require_quic_server {
-                    local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6())
-                } else {
-                    orig_server_addr
-                };
-
-                // bind the proxy server first, it may be used as the upstream of the QUIC server
-                let proxy_listener = self.bind(proxy_server_addr).await?;
-                let proxy_addr = proxy_listener.local_addr().unwrap();
-                let proxy_server_handle = self.serve_async(proxy_listener, dashboard_addr);
-
-                // join on the QUIC tunnel after the proxy server is started
-                if let Some(quic_client_join_handle) = quic_client_join_handle {
-                    info!("join on the QUIC tunnel...",);
-                    quic_client_join_handle.await.ok();
-                    info!("QUIC tunnel quit");
-                }
-
-                if require_quic_server {
-                    let quic_server_config = QuicServerConfig {
-                        server_addr: orig_server_addr,
-                        upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
-                        common_cfg: self.common_quic_config.clone(),
-                    };
-                    let mut quic_server = QuicServer::new(quic_server_config);
-                    quic_server.bind().await?;
-                    quic_server.serve().await;
-                }
-
-                proxy_server_handle.await.ok();
-
-                Ok::<(), anyhow::Error>(())
+                self.run_internal()
+                    .await
+                    .context("")
+                    .map_err(|_| std::process::exit(0))
             })
+    }
+
+    async fn run_internal(self: &mut Arc<Self>) -> Result<()> {
+        self.set_and_post_server_state(ServerState::Preparing);
+
+        // start the dashboard server
+        let addr = local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6());
+        let dashboard_server = DashboardServer::new();
+        let dashboard_listener = dashboard_server.bind(addr).await?;
+        let dashboard_addr = dashboard_listener.local_addr().ok();
+        dashboard_server
+            .serve_async(dashboard_listener, self.clone())
+            .await;
+
+        let require_quic_server = self.config.is_layered_proto;
+        let mut quic_client_join_handle = None;
+
+        if let Some(upstream) = &self.config.upstream_addr {
+            // connect to QUIC server if it is +quic protocols
+            let require_quic_client = self.config.is_upstream_layered_proto;
+            if require_quic_client {
+                quic_client_join_handle = Some(
+                    self.start_quic_client(upstream.clone(), self.common_quic_config.clone())
+                        .await?,
+                );
+            } else {
+                inner_state!(self, upstream) = upstream.to_socket_addr();
+            }
+        }
+
+        let orig_server_addr = self.config.addr;
+        let proxy_server_addr = if require_quic_server {
+            local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6())
+        } else {
+            orig_server_addr
+        };
+
+        // bind the proxy server first, it may be used as the upstream of the QUIC server
+        let proxy_listener = self.bind(proxy_server_addr).await?;
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let proxy_server_handle = self.serve_async(proxy_listener, dashboard_addr);
+
+        // join on the QUIC tunnel after the proxy server is started
+        if let Some(quic_client_join_handle) = quic_client_join_handle {
+            info!("join on the QUIC tunnel...",);
+            quic_client_join_handle.await.ok();
+            info!("QUIC tunnel quit");
+        }
+
+        if require_quic_server {
+            let quic_server_config = QuicServerConfig {
+                server_addr: orig_server_addr,
+                upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
+                common_cfg: self.common_quic_config.clone(),
+            };
+            let mut quic_server = QuicServer::new(quic_server_config);
+            quic_server.bind().await?;
+            quic_server.serve().await;
+        }
+
+        proxy_server_handle.await.context("failed on awating...")
     }
 
     async fn bind(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
