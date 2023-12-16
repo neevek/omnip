@@ -2,6 +2,7 @@ use crate::admin::admin_server::DashboardServer;
 use crate::api::{self, Api, ProxyServerConfig, QuicTunnelConfig};
 use crate::http::http_proxy_handler::HttpProxyHandler;
 use crate::proxy_handler::{OutboundType, ParseState, ProxyHandler};
+use crate::proxy_rule_manager::MatchResult;
 use crate::server_info_bridge::{
     ProxyTraffic, ServerInfo, ServerInfoBridge, ServerInfoType, ServerStats,
 };
@@ -21,12 +22,11 @@ use rs_utilities::dns::{
 };
 use rs_utilities::log_and_bail;
 use serde::Serialize;
-use std::borrow::BorrowMut;
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str::{self, FromStr};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -61,7 +61,7 @@ impl Display for ServerState {
 }
 
 struct ThreadSafeState {
-    proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
+    proxy_rule_manager: Option<ProxyRuleManager>,
     watcher: Option<Box<dyn Watcher + Send>>,
     scheduled_start: bool,
     on_info_report_enabled: bool,
@@ -493,41 +493,54 @@ impl Server {
             let mut outbound_type = OutboundType::Direct;
             let mut outbound_stream = None;
 
-            if upstream.is_some()
-                && ((addr.is_domain() && !addr.is_internal_domain())
-                    || (addr.is_ip() && !addr.is_internal_ip()))
+            if (addr.is_domain() && !addr.is_internal_domain())
+                || (addr.is_ip() && !addr.is_internal_ip())
             {
-                if prefer_upstream
-                    || params.proxy_rule_manager.is_none()
-                    || (addr.is_domain()
-                        && Self::matches_proxy_rule(
-                            params.proxy_rule_manager.as_ref().unwrap(),
-                            addr.unwrap_domain(),
-                            addr.port,
-                        ))
-                {
-                    outbound_type = match params.upstream_type.as_ref().unwrap() {
-                        ProtoType::Http => OutboundType::HttpProxy,
-                        ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
-                        ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
-                        ProtoType::Tcp => unreachable!("not valid proxy type"),
-                    };
+                let match_result = if prefer_upstream {
+                    MatchResult::Proxy
+                } else {
+                    match params.proxy_rule_manager.clone() {
+                        Some(mut prm) if addr.is_domain() => {
+                            prm.matches(addr.unwrap_domain(), addr.port)
+                        }
+                        _ => MatchResult::Direct,
+                    }
+                };
 
-                    debug!(
-                        "forward payload to next proxy({:?}), {addr} -> {:?}",
-                        outbound_type, upstream
-                    );
+                match match_result {
+                    MatchResult::Reject => {
+                        let addr = addr.clone();
+                        proxy_handler.reject(&mut inbound_stream).await?;
+                        debug!("rejected: {addr}");
+                        break;
+                    }
 
-                    outbound_stream = match TcpStream::connect(upstream.unwrap()).await {
-                        Ok(stream) => Some(stream),
-                        Err(e) => {
-                            error!(
-                                "failed to connect to upstream: {}, err: {e}",
-                                upstream.unwrap()
-                            );
-                            None
+                    MatchResult::Proxy if upstream.is_some() => {
+                        outbound_type = match params.upstream_type.as_ref().unwrap() {
+                            ProtoType::Http => OutboundType::HttpProxy,
+                            ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
+                            ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
+                            ProtoType::Tcp => unreachable!("not valid proxy type"),
+                        };
+
+                        debug!(
+                            "forward payload to next proxy({:?}), {addr} -> {:?}",
+                            outbound_type, upstream
+                        );
+
+                        outbound_stream = match TcpStream::connect(upstream.unwrap()).await {
+                            Ok(stream) => Some(stream),
+                            Err(e) => {
+                                error!(
+                                    "failed to connect to upstream: {}, err: {e}",
+                                    upstream.unwrap()
+                                );
+                                None
+                            }
                         }
                     }
+
+                    _ => {}
                 }
             }
 
@@ -632,30 +645,12 @@ impl Server {
         }
     }
 
-    fn matches_proxy_rule(
-        mut proxy_rule_manager: &Arc<RwLock<ProxyRuleManager>>,
-        domain: &str,
-        port: u16,
-    ) -> bool {
-        let result = proxy_rule_manager.read().unwrap().matches(domain, port);
-        if result.needs_sort_rules {
-            proxy_rule_manager
-                .borrow_mut()
-                .write()
-                .unwrap()
-                .sort_rules();
-        }
-
-        result.matched
-    }
-
     async fn start_stream_transfer(
         mut a_stream: TcpStream,
         mut b_stream: TcpStream,
         stats_sender: &Sender<ServerStats>,
     ) -> Result<ProxyTraffic, ProxyError> {
         stats_sender.send(ServerStats::NewConnection).await.ok();
-
         let result = match tokio::io::copy_bidirectional(&mut a_stream, &mut b_stream).await {
             Ok((tx_bytes, rx_bytes)) => {
                 debug!(
@@ -743,16 +738,11 @@ impl Server {
         }
 
         if !proxy_rules_file.is_empty() {
-            if self.config.upstream_addr.is_none() {
-                log::warn!("no upstream specified, proxy rules ignored.");
-                return Ok(());
-            }
-
             let mut prm = ProxyRuleManager::default();
             let count = prm.add_rules_by_file(proxy_rules_file);
 
             info!("{count} proxy rules added with file: {proxy_rules_file}");
-            inner_state!(self, proxy_rule_manager) = Some(Arc::new(RwLock::new(prm)));
+            inner_state!(self, proxy_rule_manager) = Some(prm);
 
             if self.config.watch_proxy_rules_change {
                 info!("will watch proxy rules change");
@@ -780,7 +770,7 @@ impl Server {
 
         inner_state!(self, watcher) = Some(Box::new(watcher));
 
-        let prm = inner_state!(self, proxy_rule_manager).clone().unwrap();
+        let mut prm = inner_state!(self, proxy_rule_manager).clone().unwrap();
         std::thread::spawn(move || {
             loop {
                 match rx.recv() {
@@ -789,7 +779,6 @@ impl Server {
                         ..
                     })) => {
                         // TODO schedule timer task to refresh the rules at low frequency
-                        let mut prm = prm.write().unwrap();
                         prm.clear_all();
                         let count = prm.add_rules_by_file(proxy_rules_file.as_str());
 
@@ -962,6 +951,6 @@ struct ProxySupportParams {
     server_addr: SocketAddr,
     upstream_type: Option<ProtoType>,
     dashboard_addr: Option<SocketAddr>,
-    proxy_rule_manager: Option<Arc<RwLock<ProxyRuleManager>>>,
+    proxy_rule_manager: Option<ProxyRuleManager>,
     stats_sender: Sender<ServerStats>,
 }

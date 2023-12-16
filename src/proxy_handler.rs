@@ -21,6 +21,8 @@ pub enum ParseState<'a> {
 pub(crate) trait ProxyHandler {
     fn parse(&mut self, data: &[u8]) -> ParseState;
 
+    async fn reject(&self, inbound_stream: &mut TcpStream) -> Result<(), ProxyError>;
+
     async fn handle(
         &self,
         outbound_type: OutboundType,

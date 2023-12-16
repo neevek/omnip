@@ -4,6 +4,7 @@ use crate::{
     proxy_handler::{OutboundType, ParseState, ProxyHandler},
     utils, NetAddr, ProxyError,
 };
+use anyhow::Context;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{debug, error};
@@ -11,7 +12,7 @@ use std::{
     cmp::min,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
-use tokio::net::TcpStream;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 #[derive(PartialEq, Debug)]
 pub(crate) enum InternalParseState {
@@ -248,5 +249,15 @@ impl ProxyHandler for SocksProxyHandler {
         inbound_stream: &mut TcpStream,
     ) -> Result<(), ProxyError> {
         self.reply_connected(inbound_stream, false).await
+    }
+
+    async fn reject(&self, inbound_stream: &mut TcpStream) -> Result<(), ProxyError> {
+        // we will still politely return OK to the client, and drop the connection
+        self.reply_connected(inbound_stream, true).await?;
+        inbound_stream
+            .flush()
+            .await
+            .context("stream is disconnected while flussing")
+            .map_err(ProxyError::Disconnected)
     }
 }

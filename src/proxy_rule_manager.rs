@@ -4,10 +4,10 @@
 /// ||example.com
 /// @@||example.com
 /// @@|example.com
+/// %%||example.com
 use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::sync::RwLock;
+use std::io::{BufRead, BufReader};
+use std::sync::{Arc, RwLock};
 
 use log::{debug, info, warn};
 use regex::Regex;
@@ -22,18 +22,10 @@ pub struct ProxyRule {
     match_count: RwLock<usize>,
 }
 
-pub struct MatchResult {
-    pub matched: bool,
-    pub needs_sort_rules: bool,
-}
-
-impl From<(bool, bool)> for MatchResult {
-    fn from(value: (bool, bool)) -> Self {
-        MatchResult {
-            matched: value.0,
-            needs_sort_rules: value.1,
-        }
-    }
+pub enum MatchResult {
+    Direct,
+    Proxy,
+    Reject,
 }
 
 impl ProxyRule {
@@ -58,16 +50,27 @@ impl ProxyRule {
     }
 }
 
+#[derive(Clone)]
 pub struct ProxyRuleManager {
+    inner: Arc<RwLock<ProxyRuleManagerInner>>,
+}
+unsafe impl Send for ProxyRuleManager {}
+unsafe impl Sync for ProxyRuleManager {}
+
+pub struct ProxyRuleManagerInner {
     match_rules: Vec<ProxyRule>,
     exception_rules: Vec<ProxyRule>,
+    reject_rules: Vec<ProxyRule>,
 }
 
 impl ProxyRuleManager {
     pub fn new() -> Self {
-        ProxyRuleManager {
-            match_rules: Vec::new(),
-            exception_rules: Vec::new(),
+        Self {
+            inner: Arc::new(RwLock::new(ProxyRuleManagerInner {
+                match_rules: Vec::new(),
+                exception_rules: Vec::new(),
+                reject_rules: Vec::new(),
+            })),
         }
     }
 
@@ -88,57 +91,63 @@ impl ProxyRuleManager {
     }
 
     pub fn add_rule(&mut self, rule: &str) -> bool {
-        if Self::has_rule(&self.match_rules, rule) {
+        let mut prm = self.inner.write().unwrap();
+        if Self::has_rule(&prm.match_rules, rule) {
             warn!("duplicated rule: {}", rule);
             return true;
         }
-        if let Some(fn_matches) = Self::parse(rule) {
-            self.match_rules.push(ProxyRule::new(rule, fn_matches));
+        if let Some(fn_matches) = Self::parse_proxy_rule(rule) {
+            prm.match_rules.push(ProxyRule::new(rule, fn_matches));
             return true;
         }
-        if Self::has_rule(&self.exception_rules, rule) {
+        if Self::has_rule(&prm.exception_rules, rule) {
             warn!("duplicated exception rule: {}", rule);
             return true;
         }
         if let Some(fn_matches) = Self::parse_exception_rule(rule) {
-            self.exception_rules.push(ProxyRule::new(rule, fn_matches));
+            prm.exception_rules.push(ProxyRule::new(rule, fn_matches));
+            return true;
+        }
+        if Self::has_rule(&prm.reject_rules, rule) {
+            warn!("duplicated reject rule: {}", rule);
+            return true;
+        }
+        if let Some(fn_matches) = Self::parse_reject_rule(rule) {
+            prm.reject_rules.push(ProxyRule::new(rule, fn_matches));
             return true;
         }
         false
     }
 
     pub fn clear_all(&mut self) {
-        self.match_rules.clear();
-        self.exception_rules.clear();
+        let mut prm = self.inner.write().unwrap();
+        prm.match_rules.clear();
+        prm.exception_rules.clear();
     }
 
-    pub fn matches(&self, host: &str, port: u16) -> MatchResult {
-        let result1 = Self::do_match(&self.match_rules, host, port);
-        let result2 = Self::do_match(&self.exception_rules, host, port);
-
-        if result1.matched {
-            debug!(
-                "matched! {}:{}, match_rule:{}, exception_rule:{}",
-                host, port, result1.matched, result2.matched
-            );
+    pub fn matches(&mut self, host: &str, port: u16) -> MatchResult {
+        let prm = self.inner.read().unwrap();
+        let should_rejct = self.do_match(&prm.reject_rules, host, port);
+        if should_rejct {
+            debug!("rejected! {host}:{port}");
+            return MatchResult::Reject;
         }
 
-        MatchResult {
-            matched: result1.matched && !result2.matched,
-            needs_sort_rules: result1.needs_sort_rules || result2.needs_sort_rules,
+        let should_proxy = self.do_match(&prm.match_rules, host, port);
+        if !should_proxy {
+            return MatchResult::Direct;
+        }
+
+        let matched_except_rule = self.do_match(&prm.exception_rules, host, port);
+        if matched_except_rule {
+            MatchResult::Direct
+        } else {
+            debug!("matched! {host}:{port}");
+            MatchResult::Proxy
         }
     }
 
-    pub fn sort_rules(&mut self) {
-        self.match_rules.sort_by(|a, b| {
-            (*b.match_count.read().unwrap()).cmp(&(*a.match_count.read().unwrap()))
-        });
-        self.exception_rules.sort_by(|a, b| {
-            (*b.match_count.read().unwrap()).cmp(&(*a.match_count.read().unwrap()))
-        });
-    }
-
-    pub fn parse(rule: &str) -> Option<FnMatch> {
+    pub fn parse_proxy_rule(rule: &str) -> Option<FnMatch> {
         if rule.is_empty() {
             return None;
         }
@@ -200,6 +209,29 @@ impl ProxyRuleManager {
         Some(Self::build_rule(rule, requires_443_port, fuzzy_match))
     }
 
+    pub fn parse_reject_rule(rule: &str) -> Option<FnMatch> {
+        if rule.is_empty() || rule.as_bytes()[0] != b'%' {
+            return None;
+        }
+
+        let mut rule = rule;
+        let mut requires_443_port = false;
+        let mut fuzzy_match = false;
+
+        // matches against domain
+        if rule.starts_with("%%|https://") {
+            rule = &rule[11..];
+            requires_443_port = true;
+        } else if rule.starts_with("%%|http://") {
+            rule = &rule[10..];
+        } else if rule.starts_with("%%||") {
+            rule = &rule[4..];
+            fuzzy_match = true;
+        }
+
+        Some(Self::build_rule(rule, requires_443_port, fuzzy_match))
+    }
+
     fn build_rule(rule: &str, requires_443_port: bool, fuzzy_match: bool) -> FnMatch {
         let rule_copy = rule.to_string();
         Box::new(move |host, port| {
@@ -217,19 +249,30 @@ impl ProxyRuleManager {
         rules.iter().any(|r| r.is_same_rule(rule))
     }
 
-    fn do_match(rules: &[ProxyRule], host: &str, port: u16) -> MatchResult {
+    fn do_match(&self, rules: &[ProxyRule], host: &str, port: u16) -> bool {
         rules
             .iter()
             .enumerate()
             .find(|(_, rule)| rule.matches(host, port))
-            .map_or((false, false).into(), |(index, rule)| {
-                (
-                    true,
-                    index >= SORT_MATCH_RULES_INDEX_THRESHOLD
-                        && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD,
-                )
-                    .into()
+            .map_or(false, |(index, rule)| {
+                if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
+                    && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
+                {
+                    info!("resort the rule for: {host}:{port}, current index:{index}");
+                    self.sort_rules();
+                }
+                true
             })
+    }
+
+    fn sort_rules(&self) {
+        let mut prm = self.inner.write().unwrap();
+        prm.match_rules.sort_by(|a, b| {
+            (*b.match_count.read().unwrap()).cmp(&(*a.match_count.read().unwrap()))
+        });
+        prm.exception_rules.sort_by(|a, b| {
+            (*b.match_count.read().unwrap()).cmp(&(*a.match_count.read().unwrap()))
+        });
     }
 }
 

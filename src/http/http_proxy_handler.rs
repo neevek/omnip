@@ -8,15 +8,15 @@ use async_trait::async_trait;
 use log::{debug, error};
 use rs_utilities::unwrap_or_return;
 use std::collections::HashMap;
-use tokio::net::TcpStream;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
 
 use super::{INITIAL_HTTP_HEADER_SIZE, MAX_HTTP_HEADER_SIZE};
 
-const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\nServer: omnip\r\n\r\n";
-const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\nServer: omnip\r\n\r\n";
-const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\nServer: omnip\r\n\r\n";
-const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nServer: omnip\r\n\r\n";
+const HTTP_RESP_200: &[u8] = b"HTTP/1.1 200 OK\r\n\r\n";
+const HTTP_RESP_400: &[u8] = b"HTTP/1.1 400 Bad Request\r\n\r\n";
+const HTTP_RESP_413: &[u8] = b"HTTP/1.1 413 Payload Too Large\r\n\r\n";
+const HTTP_RESP_502: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\n\r\n";
 
 pub struct HttpProxyHandler<'a> {
     http_request: Option<HttpRequest<'a>>,
@@ -162,6 +162,21 @@ impl ProxyHandler for HttpProxyHandler<'_> {
         inbound_stream: &mut TcpStream,
     ) -> Result<(), ProxyError> {
         utils::write_to_stream(inbound_stream, HTTP_RESP_502).await
+    }
+
+    async fn reject(&self, inbound_stream: &mut TcpStream) -> Result<(), ProxyError> {
+        let http_request = unwrap_or_return!(&self.http_request, Err(ProxyError::BadRequest));
+        if http_request.is_connect_request() {
+            // we will still politely return OK to the client, and drop the connection
+            utils::write_to_stream(inbound_stream, HTTP_RESP_200).await?;
+            inbound_stream
+                .flush()
+                .await
+                .context("stream is disconnected while flussing")
+                .map_err(ProxyError::Disconnected)
+        } else {
+            Ok(())
+        }
     }
 }
 
