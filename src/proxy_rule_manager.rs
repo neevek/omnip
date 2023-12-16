@@ -255,11 +255,17 @@ impl ProxyRuleManager {
             .enumerate()
             .find(|(_, rule)| rule.matches(host, port))
             .map_or(false, |(index, rule)| {
-                if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
-                    && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
-                {
-                    info!("resort the rule for: {host}:{port}, current index:{index}");
-                    self.sort_rules();
+                // sort the rules if it runs with tokio runtime (of course it does)
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
+                        && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
+                    {
+                        let prm = self.clone();
+                        tokio::spawn(async move {
+                            prm.sort_rules();
+                        });
+                        info!("sort the rule for: {host}:{port}, current index:{index}");
+                    }
                 }
                 true
             })

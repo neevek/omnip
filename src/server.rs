@@ -560,6 +560,18 @@ impl Server {
 
                         let mut outbound_stream = None;
                         for ip in ip_arr {
+                            let resolved_ip = NetAddr::from_ip(ip, addr.port);
+                            if resolved_ip.is_loopback()
+                                && addr.port == inbound_stream.local_addr().unwrap().port()
+                            {
+                                outbound_stream = Self::connect_to_dashboard(
+                                    params.dashboard_addr.clone(),
+                                    &inbound_stream,
+                                )
+                                .await?;
+                                break;
+                            }
+
                             let stream =
                                 Self::create_tcp_stream(SocketAddr::new(ip, addr.port)).await;
                             if stream.is_some() {
@@ -574,22 +586,11 @@ impl Server {
                     Host::IP(ip) => {
                         let inbound_addr = inbound_stream.local_addr().unwrap();
                         if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
-                            match params.dashboard_addr {
-                                Some(addr) => {
-                                    debug!(
-                                        "dashboard request: {}",
-                                        inbound_stream.peer_addr().unwrap()
-                                    );
-                                    Self::create_tcp_stream(addr).await
-                                }
-                                None => {
-                                    log::warn!(
-                                    "request routing to the proxy server itself is rejected: {}",
-                                    inbound_stream.peer_addr().unwrap()
-                                );
-                                    return Err(ProxyError::BadRequest);
-                                }
-                            }
+                            Self::connect_to_dashboard(
+                                params.dashboard_addr.clone(),
+                                &inbound_stream,
+                            )
+                            .await?
                         } else {
                             Self::create_tcp_stream(addr.to_socket_addr().unwrap()).await
                         }
@@ -621,6 +622,25 @@ impl Server {
             break;
         }
         Ok(())
+    }
+
+    async fn connect_to_dashboard(
+        dashboard_addr: Option<SocketAddr>,
+        inbound_stream: &TcpStream,
+    ) -> Result<Option<TcpStream>, ProxyError> {
+        match dashboard_addr {
+            Some(addr) => {
+                debug!("dashboard request: {}", inbound_stream.peer_addr().unwrap());
+                Ok(Self::create_tcp_stream(addr.clone()).await)
+            }
+            None => {
+                log::warn!(
+                    "request routing to the proxy server itself is rejected: {}",
+                    inbound_stream.peer_addr().unwrap()
+                );
+                return Err(ProxyError::BadRequest);
+            }
+        }
     }
 
     async fn create_tcp_stream(addr: SocketAddr) -> Option<TcpStream> {

@@ -32,7 +32,7 @@ const INTERNAL_DOMAIN_SURRFIX: [&'static str; 6] = [
     ".corp",
     ".intranet",
     ".private",
-    "localhost ",
+    "localhost",
 ];
 
 lazy_static! {
@@ -127,6 +127,14 @@ impl NetAddr {
             domain.as_str()
         } else {
             panic!("not a domain")
+        }
+    }
+
+    pub fn is_loopback(&self) -> bool {
+        if let Host::IP(ref ip) = self.host {
+            ip.is_loopback()
+        } else {
+            false
         }
     }
 
