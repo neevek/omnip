@@ -496,7 +496,7 @@ impl Server {
             if (addr.is_domain() && !addr.is_internal_domain())
                 || (addr.is_ip() && !addr.is_internal_ip())
             {
-                let match_result = if prefer_upstream {
+                let match_result = if prefer_upstream || params.proxy_rule_manager.is_none() {
                     MatchResult::Proxy
                 } else {
                     match params.proxy_rule_manager.clone() {
