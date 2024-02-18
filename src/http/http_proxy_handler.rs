@@ -66,7 +66,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
             return ParseState::FailWithReply((HTTP_RESP_400.into(), ProxyError::BadRequest));
         }
 
-        if data.len() == 0 {
+        if data.is_empty() {
             return ParseState::FailWithReply((HTTP_RESP_400.into(), ProxyError::BadRequest));
         }
 
@@ -81,7 +81,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
 
         buffer.extend_from_slice(data);
 
-        let request_text = unwrap_or_return!(find_http_request_text(&buffer), ParseState::Pending);
+        let request_text = unwrap_or_return!(find_http_request_text(buffer), ParseState::Pending);
         let request_text = unwrap_or_return!(
             std::str::from_utf8(request_text).ok(),
             ParseState::FailWithReply((HTTP_RESP_400.into(), ProxyError::BadRequest))
@@ -279,7 +279,7 @@ impl<'a> HttpRequest<'a> {
         }
 
         debug!("will parse url first: {}", url);
-        let url = Url::parse(&url);
+        let url = Url::parse(url);
         if let Ok(url) = url {
             if url.scheme().starts_with("http") {
                 let mut host = url.host_str()?;

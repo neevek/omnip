@@ -22,7 +22,7 @@ impl QuicServer {
     }
 
     pub async fn bind(&mut self) -> Result<SocketAddr> {
-        Ok(self.server.bind().await?)
+        self.server.bind().await
     }
 
     pub async fn serve(&self) {

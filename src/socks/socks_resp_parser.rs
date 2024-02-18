@@ -24,7 +24,7 @@ pub(crate) struct SocksRespParser {
 impl SocksRespParser {
     pub fn new(socks_version: SocksVersion) -> Self {
         SocksRespParser {
-            socks_version: socks_version.clone(),
+            socks_version,
             state: match socks_version {
                 SocksVersion::V5 => State::SelectMethod,
                 SocksVersion::V4 => State::Connect,

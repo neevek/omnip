@@ -245,7 +245,7 @@ impl ProxyRuleManager {
         })
     }
 
-    fn has_rule(rules: &Vec<ProxyRule>, rule: &str) -> bool {
+    fn has_rule(rules: &[ProxyRule], rule: &str) -> bool {
         rules.iter().any(|r| r.is_same_rule(rule))
     }
 

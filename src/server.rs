@@ -113,7 +113,7 @@ macro_rules! inner_state {
 macro_rules! copy_inner_state {
     ($self:expr, $($field:ident),+ $(,)?) => {
         {
-            let ref st = *$self.inner_state.lock().unwrap();
+            let st = &(*$self.inner_state.lock().unwrap());
             ($(st.$field.clone(),)+)
         }
     };
@@ -333,7 +333,7 @@ impl Server {
         let psp = Arc::new(ProxySupportParams {
             system_resolver,
             server_type: self.config.server_type.clone(),
-            server_addr: self.config.addr.clone(),
+            server_addr: self.config.addr,
             upstream_type: self.config.upstream_type.clone(),
             dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
@@ -565,7 +565,7 @@ impl Server {
                                 && addr.port == inbound_stream.local_addr().unwrap().port()
                             {
                                 outbound_stream = Self::connect_to_dashboard(
-                                    params.dashboard_addr.clone(),
+                                    params.dashboard_addr,
                                     &inbound_stream,
                                 )
                                 .await?;
@@ -586,11 +586,8 @@ impl Server {
                     Host::IP(ip) => {
                         let inbound_addr = inbound_stream.local_addr().unwrap();
                         if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
-                            Self::connect_to_dashboard(
-                                params.dashboard_addr.clone(),
-                                &inbound_stream,
-                            )
-                            .await?
+                            Self::connect_to_dashboard(params.dashboard_addr, &inbound_stream)
+                                .await?
                         } else {
                             Self::create_tcp_stream(addr.to_socket_addr().unwrap()).await
                         }

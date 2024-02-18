@@ -35,12 +35,12 @@ impl SocksReq {
                             match dst_addr.host {
                                 Host::IP(ip) => match ip {
                                     IpAddr::V4(ipv4) => {
-                                        connect_command.append_byte('\x01' as u8);
+                                        connect_command.append_byte(b'\x01');
                                         connect_command.append(&ipv4.octets());
                                         connect_command.append(&dst_addr.port.to_be_bytes());
                                     }
                                     IpAddr::V6(ipv6) => {
-                                        connect_command.append_byte('\x04' as u8);
+                                        connect_command.append_byte(b'\x04');
                                         connect_command.append(&ipv6.octets());
                                         connect_command.append(&dst_addr.port.to_be_bytes());
                                     }
@@ -48,7 +48,7 @@ impl SocksReq {
                                 Host::Domain(ref domain) => {
                                     // domain name
                                     let domain_name = domain.as_bytes();
-                                    connect_command.append_byte('\x03' as u8);
+                                    connect_command.append_byte(b'\x03');
                                     connect_command.append_byte(domain_name.len() as u8);
                                     connect_command.append(domain_name);
                                     connect_command.append(&dst_addr.port.to_be_bytes());

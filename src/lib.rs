@@ -26,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use url::Url;
 
-const INTERNAL_DOMAIN_SURRFIX: [&'static str; 6] = [
+const INTERNAL_DOMAIN_SURRFIX: [&str; 6] = [
     ".home",
     ".lan",
     ".corp",
@@ -112,10 +112,7 @@ impl NetAddr {
     }
 
     pub fn is_domain(&self) -> bool {
-        match self.host {
-            Host::Domain(_) => true,
-            _ => false,
-        }
+        matches!(self.host, Host::Domain(_))
     }
 
     pub fn is_ip(&self) -> bool {
@@ -372,10 +369,10 @@ pub fn parse_server_addr(
         (Some(ProtoType::Tcp), Some(LayeredProtoType::TcpOverQuic), "tcp+quic"),
     ];
 
-    let addr = if addr.find("://").is_some() {
+    let addr = if addr.contains("://") {
         addr.to_string()
     } else {
-        if addr.rfind("]").is_none() && addr.find(":").is_none() {
+        if addr.rfind(']').is_none() && addr.find(':').is_none() {
             format!("unspecified://127.0.0.1:{}", addr)
         } else {
             format!("unspecified://{}", addr)

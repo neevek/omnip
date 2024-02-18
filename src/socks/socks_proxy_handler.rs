@@ -93,7 +93,7 @@ impl ProxyHandler for SocksProxyHandler {
             return self.fail_with_resp();
         }
 
-        if data.len() == 0 {
+        if data.is_empty() {
             return self.fail_with_resp();
         }
 
@@ -210,7 +210,7 @@ impl ProxyHandler for SocksProxyHandler {
                 _ => None,
             };
 
-            if !target_addr.is_some() {
+            if target_addr.is_none() {
                 error!("unexpected socks5 request");
                 return self.fail_with_resp();
             }

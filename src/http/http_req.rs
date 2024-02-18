@@ -18,7 +18,7 @@ impl HttpReq {
         let mut buffer = BUFFER_POOL.alloc(INITIAL_HTTP_HEADER_SIZE);
         buffer.extend_from_slice("CONNECT ".as_bytes());
         buffer.extend_from_slice(str_addr.as_bytes());
-        buffer.push(':' as u8);
+        buffer.push(b':');
         buffer.extend_from_slice(dst_addr.port.to_string().as_bytes());
         buffer.extend_from_slice(" HTTP/1.1\r\n\r\n".as_bytes());
 
@@ -46,17 +46,14 @@ impl HttpReq {
             }
         }
 
-        match partially_read_body_start_index {
-            Some(index) => {
-                if buffer[..].starts_with("HTTP/1.1 200 OK".as_bytes()) {
-                    if index <= buffer.len() {
-                        return Ok(Vec::with_capacity(0));
-                    } else {
-                        return Ok(buffer[index..].into());
-                    }
+        if let Some(index) = partially_read_body_start_index {
+            if buffer[..].starts_with("HTTP/1.1 200 OK".as_bytes()) {
+                if index <= buffer.len() {
+                    return Ok(Vec::with_capacity(0));
+                } else {
+                    return Ok(buffer[index..].into());
                 }
             }
-            None => {}
         }
 
         Err(ProxyError::BadGateway(anyhow!(
