@@ -29,6 +29,58 @@ Features
 7. Supports DoT (DNS-over-TLS) or custom name servers, for example: `--dot-server dns.google`, `--name-servers 1.1.1.1,8.8.8.8`, if both are specified, DoT server takes precedence.
 8. Simple Web UI can be accessed from the same port of the proxy server, DNS servers and tunnel connection can be configured through the Web UI.
 
+Examples
+--------
+
+1. Running omnip in its simplest form:
+
+    ```
+    omnip -a 8000
+    ```
+
+    omnip is bound to `127.0.0.1:8000`, running as a proxy server that supports HTTP, SOCKS5 and SOCKS4. The complete format for the `-a|--addr` option is `scheme://[ip|domain]:port`, so the following command is allowed, but it will be restricted to supporting SOCKS5 only, and the proxy server will be listening on all available network interfaces on the machine:
+
+    ```
+    omnip -a socks5://0.0.0.0:8000
+    ```
+
+2. Chaining proxy servers:
+
+    `omnip -a socks5://127.0.0.1:8000 -u http://192.168.50.50:9000`
+
+    omnip runs as a SOCKS5 proxy server, which forwards all the proxy requests to the upstream server specified with the `-u|--upstream` option, in this case it simply translates SOCKS5 proxy requests to HTTP proxy requests. the schemes of the upstream can be one of `http`, `socks5`, `socks4` and their QUIC counterparts `http+quic`, `http+socks5` and `http+socks4`.
+
+3. Running omnip as QUIC secured proxy server:
+
+    `omnip -a socks5+quic://0.0.0.0:8000 -p passward123`
+
+    omnip runs as a QUIC secured proxy server, which is supposed to be used as an *upstream* by a normal proxy server through chaining, see above. In this case a temporary self-signed certificate is generated for the server and the server name of the certificate is always set to `localhost`, note this is for demo only.
+
+4. Running omnip as QUIC secured proxy server, with custom self-signed certificate and its associated private key in PEM format:
+
+    `omnip -a socks5+quic://0.0.0.0:8000 -p passward123 -c CERT_FILE -k KEY_FILE`
+
+    Note: Normal omnip proxy server setting this QUIC server as upstream must provide the same self-signed certificate file.
+
+5. Running omnip as QUIC secured proxy server, with certificate issued by trusted CA:
+
+    `omnip -a socks5+quic://DOMAIN:8000 -p passward123 -c CERT_FILE -k KEY_FILE`
+
+    Note: The server is running with DOMAIN and certificate issued by trusted CA, normal omnip proxy server setting this QUIC server as upstream must use the same DOMAIN, but NO certificate is needed in this case.
+
+6. Chaining omnip proxy servers with QUIC in between:
+
+    `omnip -a 0.0.0.0:9000 -u socks5+quic://DOMAIN:8000 -p passward123`
+
+    Traffic going from `0.0.0.0:9000` to `DOMAIN:8000` will be secured by the QUIC tunnel in this case.
+
+7. Running omnip proxy server with proxy rules:
+
+    `omnip -a 0.0.0.0:9000 -u socks5+quic://DOMAIN:8000 -p passward123 -r PROXY_RULES_FILE`
+
+    PROXY_RULES_FILE is a simple text file in which each line contains a simple rule for a domain.
+
+
 ![omnip](https://github.com/neevek/omnip/raw/master/omnip1.jpg)
 ![omnip](https://github.com/neevek/omnip/raw/master/omnip2.jpg)
 
