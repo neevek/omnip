@@ -21,8 +21,8 @@ impl QuicServer {
         QuicServer { server }
     }
 
-    pub async fn bind(&mut self) -> Result<SocketAddr> {
-        self.server.bind().await
+    pub fn bind(&mut self) -> Result<SocketAddr> {
+        self.server.bind()
     }
 
     pub async fn serve(&self) {

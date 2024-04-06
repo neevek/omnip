@@ -206,7 +206,7 @@ impl Server {
                 common_cfg: self.common_quic_config.clone(),
             };
             let mut quic_server = QuicServer::new(quic_server_config);
-            quic_server.bind().await?;
+            quic_server.bind()?;
             quic_server.serve().await;
         }
 
