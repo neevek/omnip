@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "android_logger",
  "anyhow",
