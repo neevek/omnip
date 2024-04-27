@@ -33,6 +33,7 @@ hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"
 mime_guess = "2.0"
+monolithica = { git = "https://github.com/neevek/monolithica" }
 
 [dev-dependencies]
 jni = "0.19"
@@ -46,6 +47,8 @@ android_logger = "0.13"
 jni = "0.19"
 android_logger = "0.13"
 
+[build-dependencies]
+monolithica = { git = "https://github.com/neevek/monolithica" }
 
 ######### build shared lib for android ###########
 # cargo build --target=aarch64-linux-android --release --lib

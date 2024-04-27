@@ -6,7 +6,8 @@ use http::response;
 use hyper::body;
 use hyper::{body::Body, body::Bytes, server::conn::Http, service::Service, Request, Response};
 use lazy_static::lazy_static;
-use log::{debug, error, info};
+use log::{error, info};
+use monolithica::{Asset, AssetIndexer};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -15,10 +16,11 @@ use std::sync::Arc;
 use std::{net::SocketAddr, pin::Pin};
 use tokio::net::TcpListener;
 
-static STATIC_RESOURCE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/omnip-web.blob"));
-const WEB_PREFIX: &'static str = "/web";
-const HEADER_KEY_CONTENT_TYPE: &'static str = "Content-Type";
-const CONTENT_TYPE_JSON: &'static str = "application/json";
+static WEB_RESOURCE_INDEX: &str = include_str!(concat!(env!("OUT_DIR"), "/omnip-web.idx"));
+static WEB_RESOURCE_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/omnip-web.blob"));
+
+const HEADER_KEY_CONTENT_TYPE: &str = "Content-Type";
+const CONTENT_TYPE_JSON: &str = "application/json";
 
 static HTTP_CODE_OK: u16 = 200;
 
@@ -28,29 +30,9 @@ static SERVICE_ERR_CODE_METHOD_NOT_SUPPORTED: u16 = 102;
 
 type RequestHandler = fn(api: Arc<dyn Api>, head: Parts, body: Bytes) -> Result<Body, JsonResponse>;
 type RequestHandlersMap = HashMap<&'static str, RequestHandler>;
-type StaticResourceMap = HashMap<&'static str, StaticResourceItem>;
 
 lazy_static! {
-    static ref STATIC_RESOURCE_ITEM_MAPPING: StaticResourceMap = {
-        const WEB_SOURCE_CODE_INDEX: &str =
-            include_str!(concat!(env!("OUT_DIR"), "/omnip-web.idx"));
-
-        let mut map = HashMap::new();
-        for line in WEB_SOURCE_CODE_INDEX.lines() {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-
-            let item = StaticResourceItem {
-                filename: fields[0],
-                offset: fields[1].parse().unwrap(),
-                len: fields[2].parse().unwrap(),
-            };
-
-            debug!("web source: {}", item.filename);
-
-            map.insert(item.filename, item);
-        }
-        map
-    };
+    static ref ASSET_INDEXER: AssetIndexer<'static> = AssetIndexer::new(WEB_RESOURCE_INDEX);
     static ref REQUEST_HANDLERS_MAP: RequestHandlersMap = {
         let mut map = HashMap::<&'static str, RequestHandler>::new();
         map.insert("/api/server_state", AdminServer::server_state);
@@ -68,12 +50,6 @@ lazy_static! {
         map.insert("/api/stats", AdminServer::server_stats);
         map
     };
-}
-
-struct StaticResourceItem {
-    filename: &'static str,
-    offset: usize,
-    len: usize,
 }
 
 pub struct DashboardServer {}
@@ -278,40 +254,36 @@ impl Service<Request<Body>> for AdminServer {
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         fn static_html_resp(
             builder: response::Builder,
-            StaticResourceItem {
-                filename: _,
-                offset,
-                len,
-            }: &StaticResourceItem,
+            Asset { offset, len, .. }: &Asset,
         ) -> Response<Body> {
-            let content = &STATIC_RESOURCE[*offset..(offset + len)];
+            let offset = *offset as usize;
+            let len = *len as usize;
+            let content = &WEB_RESOURCE_DATA[offset..(offset + len)];
             builder.body(Body::from(content)).unwrap()
         }
 
         let api = self.api.clone();
         let res = async {
             let path = req.uri().path();
-            let path = if ["/", "/web/", WEB_PREFIX].iter().any(|&p| p == path) {
-                "/index.html"
+            let path = if ["/", "/web", "/web/"].iter().any(|&p| p == path) {
+                "index.html"
             } else {
-                if path.len() > 4 {
-                    &path[4..]
-                } else {
-                    path
-                }
+                &path[5..] // skip /web/
             };
 
-            Ok(match STATIC_RESOURCE_ITEM_MAPPING.get(path) {
-                Some(static_res) => {
-                    let mime = match mime_guess::from_path(static_res.filename).first() {
-                        Some(t) => t.to_string(),
-                        None => "application/octet-stream".to_string(),
+            let asset = ASSET_INDEXER.locate_asset(path);
+            Ok(match asset {
+                Some(asset) => {
+                    let mime = if !asset.mime.is_empty() {
+                        &asset.mime
+                    } else {
+                        "application/octet-stream"
                     };
 
                     let builder = Response::builder()
                         .status(200)
                         .header(HEADER_KEY_CONTENT_TYPE, mime);
-                    static_html_resp(builder, static_res)
+                    static_html_resp(builder, asset)
                 }
                 None => match Self::handle_request(api, req).await {
                     Some(res) => res,
@@ -319,8 +291,8 @@ impl Service<Request<Body>> for AdminServer {
                         let builder = Response::builder()
                             .status(404)
                             .header(HEADER_KEY_CONTENT_TYPE, "text/html");
-                        let item = STATIC_RESOURCE_ITEM_MAPPING.get("/404.html").unwrap();
-                        static_html_resp(builder, item)
+                        let asset = ASSET_INDEXER.locate_asset("404.html").unwrap();
+                        static_html_resp(builder, asset)
                     }
                 },
             })

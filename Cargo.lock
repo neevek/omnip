@@ -991,6 +991,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "monolithica"
+version = "0.1.0"
+source = "git+https://github.com/neevek/monolithica#406d8028052c704f437dae4c877fde633978df02"
+dependencies = [
+ "anyhow",
+ "mime_guess",
+ "tracing",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1095,6 +1105,7 @@ dependencies = [
  "lazy_static",
  "log",
  "mime_guess",
+ "monolithica",
  "notify",
  "num_cpus",
  "pin-utils",
