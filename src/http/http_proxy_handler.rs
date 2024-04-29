@@ -7,7 +7,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, error};
 use rs_utilities::unwrap_or_return;
-use std::collections::HashMap;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
 
@@ -50,7 +49,7 @@ impl HttpProxyHandler<'_> {
         }
 
         let body = http_request.body();
-        if body.len() > 0 {
+        if !body.is_empty() {
             utils::write_to_stream(outbound_stream, body).await?;
         }
 
@@ -96,7 +95,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
         let mut method = "";
         let mut url = "";
         let mut version = "";
-        let mut headers = HashMap::<String, String>::new();
+        let mut headers = vec![];
         for (index, part) in parts.iter().enumerate() {
             if index == 0 {
                 let parts: Vec<&str> = part.split(' ').collect();
@@ -114,7 +113,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
             } else if let Some(colon_pos) = part.find(':') {
                 let k = part[0..colon_pos].trim().to_lowercase();
                 let v = part[(colon_pos + 1)..].trim().to_string();
-                headers.insert(k, v);
+                headers.push((k, v));
             }
         }
 
@@ -128,7 +127,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
             HttpRequest::build(method, url, version, headers, request_text_len, buffer);
 
         match self.http_request {
-            Some(ref http_request) => ParseState::ReceivedRequest(&http_request.target_addr),
+            Some(ref http_request) => ParseState::ReceivedRequest(&http_request.outbound_addr),
             None => ParseState::FailWithReply((HTTP_RESP_400.into(), ProxyError::BadRequest)),
         }
     }
@@ -151,7 +150,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
             }
 
             OutboundType::SocksProxy(ver) => {
-                SocksReq::handshake(ver, outbound_stream, http_request.target_addr()).await?;
+                SocksReq::handshake(ver, outbound_stream, &http_request.outbound_addr).await?;
                 Self::exchange_http_payloads(http_request, outbound_stream, inbound_stream).await
             }
         }
@@ -172,7 +171,7 @@ impl ProxyHandler for HttpProxyHandler<'_> {
             inbound_stream
                 .flush()
                 .await
-                .context("stream is disconnected while flussing")
+                .context("stream is disconnected while flushing")
                 .map_err(ProxyError::Disconnected)
         } else {
             Ok(())
@@ -198,13 +197,14 @@ fn find_http_request_text(data: &[u8]) -> Option<&[u8]> {
 
 #[derive(Debug)]
 pub(crate) struct HttpRequest<'a> {
-    method: String,
+    pub method: String,
     _url: String,
     _version: String,
-    _headers: HashMap<String, String>,
-    header_len: usize,
-    buffer: PooledBuffer<'a>,
-    target_addr: NetAddr,
+    _headers: Vec<(String, String)>,
+    pub header_len: usize,
+    pub buffer: PooledBuffer<'a>,
+    pub outbound_addr: NetAddr,
+    pub header_start_pos: usize,
 }
 
 impl<'a> HttpRequest<'a> {
@@ -212,11 +212,18 @@ impl<'a> HttpRequest<'a> {
         method: String,
         url: String,
         version: String,
-        headers: HashMap<String, String>,
+        headers: Vec<(String, String)>,
         header_len: usize,
-        buffer: PooledBuffer<'a>,
+        mut buffer: PooledBuffer<'a>,
     ) -> Option<Self> {
-        let target_addr = Self::get_request_addr(method.as_str(), url.as_str(), &headers)?;
+        let (outbound_addr, header_start_pos) = Self::derive_outbound_addr_and_header_start_pos(
+            &method,
+            &url,
+            &headers,
+            header_len,
+            &mut buffer,
+        )?;
+
         Some(Self {
             method,
             _url: url,
@@ -224,24 +231,57 @@ impl<'a> HttpRequest<'a> {
             _headers: headers,
             header_len,
             buffer,
-            target_addr,
+            outbound_addr,
+            header_start_pos,
         })
     }
 
-    fn get_request_addr(
+    fn derive_outbound_addr_and_header_start_pos(
         method: &str,
         url: &str,
-        headers: &HashMap<String, String>,
-    ) -> Option<NetAddr> {
-        //let host;
+        headers: &Vec<(String, String)>,
+        header_len: usize,
+        buffer: &mut PooledBuffer<'a>,
+    ) -> Option<(NetAddr, usize)> {
         let mut addr = None;
         let is_connect_request = method.starts_with("CONNECT");
+        let mut has_host = false;
         if is_connect_request {
             // url is the address, host:port is assumed
             addr = Some(url);
-        } else if let Some(host) = headers.get("host") {
+        } else if let Some(host) = Self::find_host(headers) {
             // host is the address, host:port is assumed
             addr = Some(host);
+            has_host = true;
+        }
+
+        // strip the scheme://host part of the url, for example:
+        // GET http://example.com/test/index.html
+        // to
+        // GET /test/index.html
+        let mut start_pos = 0;
+        if has_host && url.starts_with("http") {
+            let method_len = method.len();
+            let skip_len = if url.starts_with("https") {
+                method_len + 9 // 9 for the string " https://"
+            } else {
+                method_len + 8 // 8 for the string " http://"
+            };
+
+            let header_text = &mut buffer[..header_len];
+            if let Some(mut slash_pos) = header_text
+                .iter()
+                .skip(skip_len)
+                .position(|&c| c == b'/' || c == b' ')
+            {
+                slash_pos += skip_len;
+                if header_text[slash_pos] == b'/' {
+                    start_pos = slash_pos - method_len - 1; // - 1 for the space after METHOD
+                    header_text[start_pos..(start_pos + method_len)]
+                        .copy_from_slice(method.as_bytes());
+                    header_text[slash_pos - 1] = b' ';
+                }
+            }
         }
 
         if let Some(addr) = addr {
@@ -275,7 +315,7 @@ impl<'a> HttpRequest<'a> {
                 }
             }
 
-            return Some(NetAddr::new(host, port.unwrap()));
+            return Some((NetAddr::new(host, port.unwrap()), start_pos));
         }
 
         debug!("will parse url first: {}", url);
@@ -287,7 +327,7 @@ impl<'a> HttpRequest<'a> {
                     error!("invalid request: {}", url);
                     return None;
                 }
-                if host.bytes().nth(0).unwrap_or(b' ') == b'[' {
+                if host.as_bytes().first().unwrap_or(&b' ') == &b'[' {
                     host = &host[1..(host.len() - 1)];
                 }
                 let mut port = url.port().unwrap_or(0);
@@ -299,7 +339,7 @@ impl<'a> HttpRequest<'a> {
                     }
                 }
 
-                return Some(NetAddr::new(host, port));
+                return Some((NetAddr::new(host, port), start_pos));
             }
         }
 
@@ -307,17 +347,22 @@ impl<'a> HttpRequest<'a> {
         None
     }
 
+    fn find_host(headers: &Vec<(String, String)>) -> Option<&str> {
+        for (k, v) in headers {
+            if k == "Host" || k == "host" {
+                return Some(v);
+            }
+        }
+        None
+    }
+
     pub fn is_connect_request(&self) -> bool {
         self.method.starts_with("CONNECT")
     }
 
-    pub fn target_addr(&self) -> &NetAddr {
-        &self.target_addr
-    }
-
     /// return the complete HTTP header text, including the trailing \r\n\r\n
     pub fn header(&self) -> &[u8] {
-        &self.buffer[..self.header_len]
+        &self.buffer[self.header_start_pos..self.header_len]
     }
 
     /// return the HTTP body
