@@ -304,11 +304,14 @@ pub struct CommonQuicConfig {
 
 impl Config {
     pub fn server_addr_as_string(&self) -> String {
-        let proto = match self.server_type {
-            Some(ref pt) => pt.format_as_string(self.is_layered_proto),
-            None => "".to_string(),
-        };
-        format!("{}://{}", proto, self.addr.to_string())
+        match self.server_type {
+            Some(ref pt) => format!(
+                "{}://{}",
+                pt.format_as_string(self.is_layered_proto),
+                self.addr
+            ),
+            None => self.addr.to_string(),
+        }
     }
 
     pub fn upstream_as_string(&self) -> String {
