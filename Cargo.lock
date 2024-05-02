@@ -993,7 +993,7 @@ dependencies = [
 [[package]]
 name = "monolithica"
 version = "0.1.0"
-source = "git+https://github.com/neevek/monolithica#406d8028052c704f437dae4c877fde633978df02"
+source = "git+https://github.com/neevek/monolithica#18132f7d6a1a36e0245542e1b3fe4b96d030252a"
 dependencies = [
  "anyhow",
  "mime_guess",

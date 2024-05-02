@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // index into the omnip-web.blob file, in the format of [filepath//offset//length//mime]
     let archive_index_file_path = Path::new(&out_dir).join("omnip-web.idx");
 
-    monolithica::AssetArhiver::create_archive(
+    monolithica::AssetArchiver::create_archive(
         src_dir,
         archive_file_path.as_path(),
         archive_index_file_path.as_path(),
