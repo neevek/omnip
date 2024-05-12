@@ -47,6 +47,7 @@ pub enum ProxyError {
     IPv6NotSupported, // not supported by Socks4
     InternalError,
     BadRequest,
+    Timeout,
     PayloadTooLarge,
     BadGateway(anyhow::Error),
     Disconnected(anyhow::Error),
@@ -559,8 +560,7 @@ pub mod android {
             proxy_rules_file,
             jthreads as usize,
             false,
-            true,
-            jtcpNoDelay as bool,
+            jtcpNoDelay != 0,
         ) {
             Ok(config) => config,
             Err(e) => {
