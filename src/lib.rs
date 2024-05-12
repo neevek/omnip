@@ -275,6 +275,7 @@ pub struct Config {
     pub dot_server: String,
     pub name_servers: String,
     pub watch_proxy_rules_change: bool,
+    pub tcp_nodelay: bool,
 }
 
 #[derive(Debug)]
@@ -427,6 +428,7 @@ pub fn create_config(
     proxy_rules_file: String,
     threads: usize,
     watch_proxy_rules_change: bool,
+    tcp_nodelay: bool,
 ) -> Result<Config> {
     let (server_type, orig_server_addr, is_layered_proto) = parse_server_addr(addr.as_str());
 
@@ -476,6 +478,7 @@ pub fn create_config(
         dot_server,
         name_servers,
         watch_proxy_rules_change,
+        tcp_nodelay,
     })
 }
 
@@ -532,6 +535,7 @@ pub mod android {
         jmaxIdleTimeoutMs: jint,
         jretryIntervalMs: jint,
         jthreads: jint,
+        jtcpNoDelay: jboolean,
     ) -> jlong {
         if jaddr.is_null() {
             return 0;
@@ -555,6 +559,8 @@ pub mod android {
             proxy_rules_file,
             jthreads as usize,
             false,
+            true,
+            jtcpNoDelay as bool,
         ) {
             Ok(config) => config,
             Err(e) => {

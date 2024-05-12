@@ -153,6 +153,7 @@ impl Server {
     }
 
     async fn run_internal(self: &mut Arc<Self>) -> Result<()> {
+        info!("tcp_nodelay:{}", self.config.tcp_nodelay);
         self.set_and_post_server_state(ServerState::Preparing);
 
         // start the dashboard server
@@ -338,6 +339,7 @@ impl Server {
             dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
             stats_sender,
+            tcp_nodelay: self.config.tcp_nodelay,
         });
 
         loop {
@@ -346,6 +348,13 @@ impl Server {
                     let psp = psp.clone();
                     let (prefer_upstream, upstream, dns_resolver) =
                         copy_inner_state!(self, prefer_upstream, upstream, dns_resolver);
+                    if psp.tcp_nodelay {
+                        inbound_stream
+                            .set_nodelay(true)
+                            .map_err(|e| error!("failed to call set_nodelay: {e}"))
+                            .ok();
+                    }
+
                     tokio::spawn(async move {
                         if let Some(ProtoType::Tcp) = psp.server_type {
                             if upstream.is_none() {
@@ -353,24 +362,17 @@ impl Server {
                                 return;
                             }
 
-                            match TcpStream::connect(upstream.unwrap()).await {
-                                Ok(outbound_stream) => {
-                                    Self::start_stream_transfer(
-                                        inbound_stream,
-                                        outbound_stream,
-                                        &psp.stats_sender,
-                                    )
-                                    .await
-                                    .ok();
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "failed to connect to upstream: {}, err: {e}",
-                                        upstream.unwrap()
-                                    );
-                                }
-                            };
-
+                            if let Some(outbound_stream) =
+                                Self::create_tcp_stream(upstream.unwrap(), psp.tcp_nodelay).await
+                            {
+                                Self::start_stream_transfer(
+                                    inbound_stream,
+                                    outbound_stream,
+                                    &psp.stats_sender,
+                                )
+                                .await
+                                .ok();
+                            }
                             return;
                         }
 
@@ -529,16 +531,8 @@ impl Server {
                             outbound_type, upstream
                         );
 
-                        outbound_stream = match TcpStream::connect(upstream.unwrap()).await {
-                            Ok(stream) => Some(stream),
-                            Err(e) => {
-                                error!(
-                                    "failed to connect to upstream: {}, err: {e}",
-                                    upstream.unwrap()
-                                );
-                                None
-                            }
-                        }
+                        outbound_stream =
+                            Self::create_tcp_stream(upstream.unwrap(), params.tcp_nodelay).await;
                     }
 
                     _ => {}
@@ -571,13 +565,17 @@ impl Server {
                                 outbound_stream = Self::connect_to_dashboard(
                                     params.dashboard_addr,
                                     &inbound_stream,
+                                    params.tcp_nodelay,
                                 )
                                 .await?;
                                 break;
                             }
 
-                            let stream =
-                                Self::create_tcp_stream(SocketAddr::new(ip, addr.port)).await;
+                            let stream = Self::create_tcp_stream(
+                                SocketAddr::new(ip, addr.port),
+                                params.tcp_nodelay,
+                            )
+                            .await;
                             if stream.is_some() {
                                 outbound_stream = stream;
                                 break;
@@ -590,10 +588,18 @@ impl Server {
                     Host::IP(ip) => {
                         let inbound_addr = inbound_stream.local_addr().unwrap();
                         if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
-                            Self::connect_to_dashboard(params.dashboard_addr, &inbound_stream)
-                                .await?
+                            Self::connect_to_dashboard(
+                                params.dashboard_addr,
+                                &inbound_stream,
+                                params.tcp_nodelay,
+                            )
+                            .await?
                         } else {
-                            Self::create_tcp_stream(addr.to_socket_addr().unwrap()).await
+                            Self::create_tcp_stream(
+                                addr.to_socket_addr().unwrap(),
+                                params.tcp_nodelay,
+                            )
+                            .await
                         }
                     }
                 };
@@ -628,11 +634,12 @@ impl Server {
     async fn connect_to_dashboard(
         dashboard_addr: Option<SocketAddr>,
         inbound_stream: &TcpStream,
+        tcp_nodelay: bool,
     ) -> Result<Option<TcpStream>, ProxyError> {
         match dashboard_addr {
             Some(addr) => {
                 debug!("dashboard request: {}", inbound_stream.peer_addr().unwrap());
-                Ok(Self::create_tcp_stream(addr).await)
+                Ok(Self::create_tcp_stream(addr, tcp_nodelay).await)
             }
             None => {
                 log::warn!(
@@ -644,19 +651,27 @@ impl Server {
         }
     }
 
-    async fn create_tcp_stream(addr: SocketAddr) -> Option<TcpStream> {
+    async fn create_tcp_stream(addr: SocketAddr, nodelay: bool) -> Option<TcpStream> {
         if addr.ip().is_unspecified() {
             error!("address is unspecified: {addr}");
             return None;
         }
 
-        TcpStream::connect(addr)
+        let stream = TcpStream::connect(addr)
             .await
             .map_err(|e| {
                 error!("failed to connect to address: {addr}, err: {e}");
                 e
             })
-            .ok()
+            .ok()?;
+
+        if nodelay {
+            stream
+                .set_nodelay(true)
+                .map_err(|e| error!("failed to call set_nodelay: {e}"))
+                .ok();
+        }
+        Some(stream)
     }
 
     fn server_type_as_string(&self) -> String {
@@ -974,4 +989,5 @@ struct ProxySupportParams {
     dashboard_addr: Option<SocketAddr>,
     proxy_rule_manager: Option<ProxyRuleManager>,
     stats_sender: Sender<ServerStats>,
+    tcp_nodelay: bool,
 }

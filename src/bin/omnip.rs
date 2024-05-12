@@ -21,6 +21,7 @@ fn main() -> Result<()> {
         args.proxy_rules_file,
         args.threads,
         args.watch_proxy_rules_change,
+        args.tcp_nodelay,
     )?;
 
     let common_quic_config = CommonQuicConfig {
@@ -97,6 +98,10 @@ struct OmnipArgs {
     /// Max idle timeout for the QUIC connections
     #[arg(short = 'R', long, default_value = "5000")]
     retry_interval_ms: u64,
+
+    /// set TCP_NODELAY
+    #[arg(long, action)]
+    tcp_nodelay: bool,
 
     /// reload proxy rules if updated
     #[arg(short = 'w', long, action)]
