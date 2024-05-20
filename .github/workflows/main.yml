@@ -16,7 +16,7 @@ jobs:
           toolchain: stable
           target: x86_64-unknown-linux-gnu
           override: true
-      - run: rustup update && cargo build --all-features --release && strip target/release/omnip && mv target/release/omnip target/release/omnip-linux-x86_64
+      - run: rustup update && cargo build --all-features --release && mv target/release/omnip target/release/omnip-linux-x86_64
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -39,7 +39,7 @@ jobs:
           toolchain: stable
           target: x86_64-pc-windows-msvc
           override: true
-      - run: cargo build --all-features --release && strip target/release/omnip.exe && mv target/release/omnip.exe target/release/omnip-windows-x86_64.exe
+      - run: cargo build --all-features --release && mv target/release/omnip.exe target/release/omnip-windows-x86_64.exe
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -59,13 +59,13 @@ jobs:
           toolchain: stable
           target: x86_64-apple-darwin
           override: true
-      - run: cargo build --all-features --release && strip target/release/omnip && mv target/release/omnip target/release/omnip-darwin-x86_64
+      - run: rustup target add x86_64-apple-darwin && cargo build --all-features --release --target x86_64-apple-darwin && mv target/x86_64-apple-darwin/release/omnip target/x86_64-apple-darwin/release/omnip-darwin-x86_64
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/omnip-darwin-x86_64
+            target/x86_64-apple-darwin/release/omnip-darwin-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             
