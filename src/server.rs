@@ -11,7 +11,7 @@ use crate::socks::SocksVersion;
 use crate::{
     local_socket_addr_with_unspecified_port, utils, CommonQuicConfig, Config, Host, NetAddr,
     ProtoType, ProxyError, ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer,
-    QuicServerConfig,
+    QuicServerConfig, BUFFER_POOL,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info, warn};
@@ -156,7 +156,10 @@ impl Server {
     }
 
     async fn run_internal(self: &mut Arc<Self>) -> Result<()> {
-        info!("tcp_nodelay:{}", self.config.tcp_nodelay);
+        info!(
+            "tcp_nodelay:{}, threads:%{}",
+            self.config.tcp_nodelay, self.config.threads
+        );
         self.set_and_post_server_state(ServerState::Preparing);
 
         // start the dashboard server
@@ -710,8 +713,9 @@ impl Server {
         debug!("sess start: {in_addr:<20} ↔ {out_addr:<20}");
 
         const BUFFER_SIZE: usize = 8192;
-        let mut inbound_buffer = vec![0; BUFFER_SIZE];
-        let mut outbound_buffer = vec![0; BUFFER_SIZE];
+        let mut inbound_buffer = BUFFER_POOL.alloc_and_fill(BUFFER_SIZE);
+        let mut outbound_buffer = BUFFER_POOL.alloc_and_fill(BUFFER_SIZE);
+
         let (mut inbound_reader, mut inbound_writer) = inbound_stream.split();
         let (mut outbound_reader, mut outbound_writer) = outbound_stream.split();
 
