@@ -157,7 +157,7 @@ impl Server {
 
     async fn run_internal(self: &mut Arc<Self>) -> Result<()> {
         info!(
-            "tcp_nodelay:{}, threads:%{}",
+            "tcp_nodelay:{}, threads:{}",
             self.config.tcp_nodelay, self.config.threads
         );
         self.set_and_post_server_state(ServerState::Preparing);

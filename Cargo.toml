@@ -1,6 +1,6 @@
 [package]
 name = "omnip"
-version = "0.4.21"
+version = "0.4.22"
 edition = "2021"
 
 [lib]
@@ -34,6 +34,7 @@ http = "0.2"
 http-body = "0.4"
 mime_guess = "2.0"
 monolithica = { git = "https://github.com/neevek/monolithica" }
+base64 = "0.22"
 
 [dev-dependencies]
 jni = "0.19"
