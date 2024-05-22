@@ -12,7 +12,7 @@ extern crate pretty_env_logger;
 
 fn main() -> Result<()> {
     let args = parse_args()?;
-    if print_args_as_base64(&args) {
+    if args.decode_base64 || print_args_as_base64(&args) {
         return Ok(());
     }
 
@@ -58,6 +58,12 @@ fn parse_args() -> Result<OmnipArgs> {
                         .decode(base64_args)
                         .context("invalid base64")?,
                 )?;
+                if args.decode_base64 {
+                    println!("{space_sep_args}");
+                    // simply print the args and quit
+                    return Ok(args);
+                }
+
                 let parts: Vec<String> = space_sep_args
                     .split_whitespace()
                     .map(String::from)
@@ -76,10 +82,10 @@ fn parse_args() -> Result<OmnipArgs> {
 }
 
 fn print_args_as_base64(args: &OmnipArgs) -> bool {
-    if args.print_base64 {
+    if args.encode_base64 {
         let space_sep_args = env::args_os()
             .skip(1)
-            .filter(|arg| arg != "-P" && arg != "--print-base64")
+            .filter(|arg| arg != "-E" && arg != "--encode-base64")
             .map(|arg| {
                 arg.into_string()
                     .unwrap_or_else(|os_str| os_str.to_string_lossy().into_owned())
@@ -179,6 +185,10 @@ struct OmnipArgs {
 
     /// Print the args as base64 string to be used in opp:// address, will be ignored if passing in
     /// as an opp:// address, which can combine all args as a single base64 string
-    #[arg(short = 'P', long, action)]
-    print_base64: bool,
+    #[arg(short = 'E', long, action)]
+    encode_base64: bool,
+
+    /// Decode and print the base64 encoded opp:// address
+    #[arg(short = 'D', long, action)]
+    decode_base64: bool,
 }
