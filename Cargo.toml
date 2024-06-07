@@ -35,6 +35,7 @@ http-body = "0.4"
 mime_guess = "2.0"
 monolithica = { git = "https://github.com/neevek/monolithica" }
 base64 = "0.22"
+rustls = { version = "0.23" }
 
 [dev-dependencies]
 jni = "0.19"

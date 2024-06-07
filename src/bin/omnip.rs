@@ -5,12 +5,14 @@ use clap::{builder::PossibleValuesParser, Parser};
 use log::error;
 use omnip::*;
 use rs_utilities::log_and_bail;
+use rustls::crypto::CryptoProvider;
 use std::env;
 use url::Url;
 
 extern crate pretty_env_logger;
 
 fn main() -> Result<()> {
+    CryptoProvider::install_default();
     let args = parse_args()?;
     if args.decode_base64 || print_args_as_base64(&args) {
         return Ok(());
