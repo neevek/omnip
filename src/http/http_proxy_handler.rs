@@ -372,6 +372,6 @@ impl<'a> HttpRequest<'a> {
 
     /// return the entire request payload
     pub fn payload(&self) -> &[u8] {
-        &self.buffer[..]
+        &self.buffer[self.header_start_pos..]
     }
 }
