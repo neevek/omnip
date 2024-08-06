@@ -163,7 +163,10 @@ impl Server {
         self.set_and_post_server_state(ServerState::Preparing);
 
         // start the dashboard server
-        let addr = local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6());
+        let addr = match self.config.dashboard_addr {
+            Some(dashboard_addr) => dashboard_addr,
+            None => local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6()),
+        };
         let dashboard_server = DashboardServer::new();
         let dashboard_listener = dashboard_server.bind(addr).await?;
         let dashboard_addr = dashboard_listener.local_addr().ok();

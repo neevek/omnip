@@ -31,6 +31,7 @@ fn main() -> Result<()> {
         args.threads,
         args.watch_proxy_rules_change,
         args.tcp_nodelay,
+        Some(args.dashboard_addr),
     )?;
 
     let common_quic_config = CommonQuicConfig {
@@ -113,6 +114,11 @@ struct OmnipArgs {
     /// [<http|socks5|socks4>://]ip:port for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
     #[arg(short = 'u', long, default_value = "")]
     upstream: String,
+
+    /// Dashboard server address [ip:port]
+    /// for example: 127.0.0.1:8000, [::1]:8000
+    #[arg(short = 'd', long, default_value = "")]
+    dashboard_addr: String,
 
     /// Path to the proxy rules file
     #[arg(short = 'r', long, default_value = "")]
