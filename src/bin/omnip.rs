@@ -148,9 +148,9 @@ struct OmnipArgs {
     password: String,
 
     /// Applicable only for +quic protocols
-    /// Password of the +quic server
-    #[arg(short = 'e', long, default_value_t = String::from(rstun::SUPPORTED_CIPHER_SUITES[0]),
-        value_parser = PossibleValuesParser::new(rstun::SUPPORTED_CIPHER_SUITES).map(|v| v.to_string()))]
+    /// Cipher for encryption
+    #[arg(short = 'e', long, default_value_t = String::from(rstun::SUPPORTED_CIPHER_SUITE_STRS[0]),
+        value_parser = PossibleValuesParser::new(rstun::SUPPORTED_CIPHER_SUITE_STRS).map(|v| v.to_string()))]
     cipher: String,
 
     /// Applicable only for quic protocol as upstream
