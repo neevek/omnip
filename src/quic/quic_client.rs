@@ -7,7 +7,7 @@ use crate::QuicClientConfig;
 pub struct QuicClient {
     client: Arc<rstun::Client>,
     server_addr: String,
-    access_server_addr: Option<SocketAddr>,
+    tcp_server_addr: Option<SocketAddr>,
 }
 
 impl QuicClient {
@@ -18,12 +18,12 @@ impl QuicClient {
         QuicClient {
             client: rstun::Client::new(config.clone()),
             server_addr,
-            access_server_addr: None,
+            tcp_server_addr: None,
         }
     }
 
-    pub async fn start_access_server(&mut self) -> Result<()> {
-        self.access_server_addr = Some(self.client.start_access_server().await?);
+    pub async fn start_tcp_server(&mut self) -> Result<()> {
+        self.tcp_server_addr = Some(self.client.start_tcp_server().await?);
         Ok(())
     }
 
@@ -47,8 +47,8 @@ impl QuicClient {
         self.server_addr.clone()
     }
 
-    pub fn access_server_addr(&self) -> Option<SocketAddr> {
-        self.access_server_addr
+    pub fn tcp_server_addr(&self) -> Option<SocketAddr> {
+        self.tcp_server_addr
     }
 
     pub fn get_state(&self) -> rstun::ClientState {
@@ -60,15 +60,14 @@ impl QuicClient {
         config.cert_path = quic_client_config.common_cfg.cert.clone();
         config.cipher = quic_client_config.common_cfg.cipher.clone();
         config.max_idle_timeout_ms = quic_client_config.common_cfg.max_idle_timeout_ms;
-        config.keep_alive_interval_ms = quic_client_config.common_cfg.max_idle_timeout_ms / 2;
         config.threads = quic_client_config.common_cfg.threads;
         config.wait_before_retry_ms = quic_client_config.common_cfg.retry_interval_ms;
         config.connect_max_retry = 0;
         config.mode = rstun::TUNNEL_MODE_OUT;
-        config.local_access_server_addr = Some(quic_client_config.local_access_server_addr);
+        config.local_tcp_server_addr = Some(quic_client_config.local_tcp_server_addr);
         config.login_msg = Some(rstun::TunnelMessage::ReqOutLogin(rstun::LoginInfo {
             password: quic_client_config.common_cfg.password.clone(),
-            access_server_addr: None,
+            tcp_server_addr: None,
         }))
     }
 }

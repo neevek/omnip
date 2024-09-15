@@ -253,7 +253,7 @@ impl Server {
         // with +quic protocols, quic_client will be used to connect to the upstream
         let quic_client_config = QuicClientConfig {
             server_addr: quic_server_addr,
-            local_access_server_addr: local_socket_addr_with_unspecified_port(
+            local_tcp_server_addr: local_socket_addr_with_unspecified_port(
                 self.config.addr.is_ipv6(),
             ),
             common_cfg: common_quic_config,
@@ -267,18 +267,15 @@ impl Server {
                 info_bridge.post_server_log(data);
             });
         }
-        client.start_access_server().await?;
+        client.start_tcp_server().await?;
 
-        let access_server_addr = client.access_server_addr();
-        info!(
-            "QUIC tunnel access server address: {:?}",
-            access_server_addr
-        );
+        let tcp_server_addr = client.tcp_server_addr();
+        info!("QUIC tunnel access server address: {:?}", tcp_server_addr);
 
         // will handover the handle to the caller, so we don't block here
         let join_handle = client.connect_and_serve_async();
 
-        inner_state!(self, upstream) = access_server_addr;
+        inner_state!(self, upstream) = tcp_server_addr;
         inner_state!(self, quic_client) = Some(Arc::new(client));
 
         Ok(join_handle)

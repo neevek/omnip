@@ -289,7 +289,7 @@ pub struct QuicServerConfig {
 #[derive(Debug, Clone)]
 pub struct QuicClientConfig {
     pub server_addr: NetAddr,
-    pub local_access_server_addr: SocketAddr,
+    pub local_tcp_server_addr: SocketAddr,
     pub common_cfg: CommonQuicConfig,
 }
 

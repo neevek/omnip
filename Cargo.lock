@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1455,8 +1455,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.5.0"
-source = "git+https://github.com/neevek/rstun#ed4e99e965c3661c6400f4b0655195dabf04cf88"
+version = "0.5.1"
+source = "git+https://github.com/neevek/rstun#6d2057ebdf929de6d58a4dfb1603e2e18c7ea3e0"
 dependencies = [
  "android_logger",
  "anyhow",
