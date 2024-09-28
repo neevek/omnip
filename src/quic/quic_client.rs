@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rstun::Upstream;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 
@@ -23,7 +24,7 @@ impl QuicClient {
     }
 
     pub async fn start_tcp_server(&mut self) -> Result<()> {
-        self.tcp_server_addr = Some(self.client.start_tcp_server().await?);
+        self.tcp_server_addr = self.client.start_tcp_server().await?;
         Ok(())
     }
 
@@ -67,7 +68,8 @@ impl QuicClient {
         config.local_tcp_server_addr = Some(quic_client_config.local_tcp_server_addr);
         config.login_msg = Some(rstun::TunnelMessage::ReqOutLogin(rstun::LoginInfo {
             password: quic_client_config.common_cfg.password.clone(),
-            tcp_server_addr: None,
+            tcp_upstream: Upstream::PeerDefault,
+            udp_upstream: Upstream::NotSpecified,
         }))
     }
 }
