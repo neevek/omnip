@@ -277,6 +277,7 @@ pub struct Config {
     pub name_servers: String,
     pub watch_proxy_rules_change: bool,
     pub tcp_nodelay: bool,
+    pub dashboard_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug)]
@@ -430,6 +431,7 @@ pub fn create_config(
     threads: usize,
     watch_proxy_rules_change: bool,
     tcp_nodelay: bool,
+    dashboard_addr: Option<String>,
 ) -> Result<Config> {
     let (server_type, orig_server_addr, is_layered_proto) = parse_server_addr(addr.as_str());
 
@@ -467,6 +469,11 @@ pub fn create_config(
         num_cpus::get()
     };
 
+    let dashboard_server_addr = dashboard_addr.as_deref().and_then(parse_socket_addr);
+    if dashboard_server_addr.is_none() {
+        log_and_bail!("server addr must be an IP address: {:?}", addr);
+    }
+
     Ok(Config {
         server_type,
         addr: server_addr,
@@ -480,6 +487,7 @@ pub fn create_config(
         name_servers,
         watch_proxy_rules_change,
         tcp_nodelay,
+        dashboard_addr: dashboard_server_addr,
     })
 }
 
@@ -561,6 +569,7 @@ pub mod android {
             jthreads as usize,
             false,
             jtcpNoDelay != 0,
+            None,
         ) {
             Ok(config) => config,
             Err(e) => {
