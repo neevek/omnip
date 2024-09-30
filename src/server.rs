@@ -8,10 +8,10 @@ use crate::server_info_bridge::{
 };
 use crate::socks::socks_proxy_handler::SocksProxyHandler;
 use crate::socks::SocksVersion;
+use crate::udp::udp_server::UdpServer;
 use crate::{
-    local_socket_addr_with_unspecified_port, utils, CommonQuicConfig, Config, Host, NetAddr,
-    ProtoType, ProxyError, ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer,
-    QuicServerConfig, BUFFER_POOL,
+    local_socket_addr, utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError,
+    ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig, BUFFER_POOL,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, info, warn};
@@ -71,10 +71,12 @@ struct ThreadSafeState {
     server_info_bridge: ServerInfoBridge,
     state: ServerState,
     quic_client: Option<Arc<QuicClient>>,
+    system_dns_resolver: Option<Arc<DNSResolver>>,
     dns_resolver: Option<Arc<DNSResolver>>,
     prefer_upstream: bool,
     // the following 3 fields are redundant, they exist in this struct because they can use updated
-    upstream: Option<SocketAddr>,
+    tcp_upstream: Option<SocketAddr>,
+    udp_upstream: Option<SocketAddr>,
     dot_server: Option<String>,
     name_servers: Option<String>,
     // stats
@@ -94,9 +96,11 @@ impl ThreadSafeState {
             server_info_bridge: ServerInfoBridge::new(),
             state: ServerState::Idle,
             quic_client: None,
+            system_dns_resolver: None,
             dns_resolver: None,
             prefer_upstream: false,
-            upstream: None,
+            tcp_upstream: None,
+            udp_upstream: None,
             dot_server: None,
             name_servers: None,
             total_rx_bytes: 0,
@@ -144,7 +148,7 @@ impl Server {
     pub fn run(self: &mut Arc<Self>) -> Result<()> {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .worker_threads(self.config.threads)
+            .worker_threads(self.config.workers)
             .build()
             .unwrap()
             .block_on(async {
@@ -156,14 +160,16 @@ impl Server {
     }
 
     async fn run_internal(self: &mut Arc<Self>) -> Result<()> {
+        let cfg = &self.config;
         info!(
-            "tcp_nodelay:{}, threads:{}",
-            self.config.tcp_nodelay, self.config.threads
+            "tcp_nodelay:{}, workers:{}",
+            cfg.tcp_nodelay, self.config.workers
         );
         self.set_and_post_server_state(ServerState::Preparing);
 
         // start the dashboard server
-        let addr = local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6());
+        let is_ipv6 = cfg.server_addr.net_addr.is_ipv6();
+        let addr = local_socket_addr(is_ipv6);
         let dashboard_server = DashboardServer::new();
         let dashboard_listener = dashboard_server.bind(addr).await?;
         let dashboard_addr = dashboard_listener.local_addr().ok();
@@ -171,45 +177,114 @@ impl Server {
             .serve_async(dashboard_listener, self.clone())
             .await;
 
-        let require_quic_server = self.config.is_layered_proto;
-        let mut quic_client_join_handle = None;
+        let server_proto = cfg.server_addr.proto.clone();
+        let is_tcp_or_udp_proto = server_proto
+            .clone()
+            .map_or(false, |p| p == ProtoType::Tcp || p == ProtoType::Udp);
 
-        if let Some(upstream) = &self.config.upstream_addr {
+        let mut quic_client_join_handle = None;
+        if let Some(upstream_addr) = &cfg.upstream_addr {
             // connect to QUIC server if it is +quic protocols
-            let require_quic_client = self.config.is_upstream_layered_proto;
+            let require_quic_client = upstream_addr.is_quic_proto;
             if require_quic_client {
-                quic_client_join_handle = Some(
-                    self.start_quic_client(upstream.clone(), self.common_quic_config.clone())
-                        .await?,
-                );
+                // connecting to quic server, and it will set relevant upstream address
+                let join_handle = self
+                    .start_quic_client(
+                        upstream_addr.net_addr.clone(),
+                        self.common_quic_config.clone(),
+                    )
+                    .await?;
+
+                if is_tcp_or_udp_proto {
+                    info!(
+                        "start serving {} through quic client",
+                        server_proto.unwrap().format_as_string(false)
+                    );
+                    join_handle.await.ok();
+                    // directly use the quic client's tcp server or udp server, and return early
+                    return Ok(());
+                }
+
+                // self.tcp_upstream or self.udp_upstream is set accordingly when reaching here
+                quic_client_join_handle = Some(join_handle);
+            } else if upstream_addr.proto == Some(ProtoType::Udp) {
+                // non-quic upstream can only use IP address instead of domain
+                inner_state!(self, udp_upstream) = upstream_addr.net_addr.to_socket_addr();
             } else {
-                inner_state!(self, upstream) = upstream.to_socket_addr();
+                // non-quic upstream can only use IP address instead of domain
+                inner_state!(self, tcp_upstream) = upstream_addr.net_addr.to_socket_addr();
             }
         }
 
-        let orig_server_addr = self.config.addr;
-        let proxy_server_addr = if require_quic_server {
-            local_socket_addr_with_unspecified_port(self.config.addr.is_ipv6())
-        } else {
-            orig_server_addr
-        };
+        let is_udp_proto = server_proto == Some(ProtoType::Udp);
+        let orig_server_addr = cfg.server_addr.net_addr.to_socket_addr().unwrap();
+        let require_quic_server = cfg.server_addr.is_quic_proto;
 
-        // bind the proxy server first, it may be used as the upstream of the QUIC server
-        let proxy_listener = self.bind(proxy_server_addr).await?;
-        let proxy_addr = proxy_listener.local_addr().unwrap();
-        let proxy_server_handle = self.serve_async(proxy_listener, dashboard_addr);
+        // if is_udp_proto && !require_quic_server {
+        //     self.bind_udp_server(orig_server_addr, true).await?;
+        //     return Ok(());
+        // }
+
+        // if is_tcp_or_udp_proto {
+        //     // we need to start the tcp or udp server
+        //     if let Some(ProtoType::Udp) = cfg.server_addr.proto {
+        //         if !require_quic_server {
+        //             let udp_server = self.bind_udp_server(proxy_server_addr, true).await?;
+        //         }
+        //     } else {
+        //     }
+        // }
+
+        // // let (require_tcp, require_udp) = self.is_tcp_or_udp_server_required();
+        // let udp_server_addr = if let Some(ProtoType::Udp) = cfg.server_addr.proto {
+        //     let udp_server = self.bind_udp_server(proxy_server_addr, true).await?;
+        //     udp_server.local_addr().ok()
+        // } else {
+        //     inner_state!(self, udp_upstream)
+        // };
+
+        let (proxy_tcp_server_handle, quic_server_tcp_upstream, quic_server_udp_upstream) =
+            if !is_udp_proto {
+                let tcp_server_addr = if require_quic_server {
+                    local_socket_addr(is_ipv6)
+                } else {
+                    orig_server_addr
+                };
+
+                // bind the proxy server first, it may be used as the upstream of the QUIC server
+                let tcp_listener = self.bind_tcp_server(tcp_server_addr).await?;
+
+                let tcp_upstream = if require_quic_server {
+                    // the tcp server can be sitting in front of the quic client or
+                    // back of the quic server, always use the tcp server as the upstream
+                    // of the quic server
+                    tcp_listener.local_addr().ok()
+                } else {
+                    None
+                };
+
+                let server_handle = self.serve(tcp_listener, dashboard_addr);
+                (Some(server_handle), tcp_upstream, None)
+            } else {
+                if !require_quic_server {
+                    self.bind_udp_server(orig_server_addr, true).await?;
+                    return Ok(());
+                }
+
+                // for +quic udp server, udp_upstream is required, so we can use it directly
+                (None, None, inner_state!(self, udp_upstream))
+            };
 
         // join on the QUIC tunnel after the proxy server is started
         if let Some(quic_client_join_handle) = quic_client_join_handle {
-            info!("join on the QUIC tunnel...",);
+            info!("join on the quic tunnel...",);
             quic_client_join_handle.await.ok();
-            info!("QUIC tunnel quit");
-        }
-
-        if require_quic_server {
+            info!("quic tunnel quit");
+        } else if require_quic_server {
             let quic_server_config = QuicServerConfig {
                 server_addr: orig_server_addr,
-                upstream_addr: proxy_addr, // use proxy as the upstream of the QUIC tunnel
+                tcp_upstream: quic_server_tcp_upstream,
+                udp_upstream: quic_server_udp_upstream,
                 common_cfg: self.common_quic_config.clone(),
             };
             let mut quic_server = QuicServer::new(quic_server_config);
@@ -217,10 +292,16 @@ impl Server {
             quic_server.serve().await;
         }
 
-        proxy_server_handle.await.context("failed on awating...")
+        if let Some(proxy_tcp_server_handle) = proxy_tcp_server_handle {
+            proxy_tcp_server_handle
+                .await
+                .context("failed on awating...")
+        } else {
+            Ok(())
+        }
     }
 
-    async fn bind(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
+    async fn bind_tcp_server(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
         self.setup_proxy_rules_manager()?;
 
         let listener = TcpListener::bind(addr).await.map_err(|e| {
@@ -228,21 +309,47 @@ impl Server {
             e
         })?;
 
-        let proxy_addr = listener.local_addr().unwrap();
-        let server_type = self.server_type_as_string();
+        let tcp_server_addr = listener.local_addr().unwrap();
+        let proto = self.proto_as_string();
 
         info!("==========================================================");
-        info!("proxy server bound to: {proxy_addr}, type: {server_type}");
+        info!("tcp server bound to: {tcp_server_addr}, type: {proto}");
         info!("==========================================================");
 
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ProxyMessage,
             Box::new(format!(
-                "Proxy server bound to: {proxy_addr}, type: {server_type}"
+                "tcp server bound to: {tcp_server_addr}, type: {proto}"
             )),
         ));
 
         Ok(listener)
+    }
+
+    async fn bind_udp_server(
+        self: &Arc<Self>,
+        addr: SocketAddr,
+        use_sync: bool,
+    ) -> Result<UdpServer> {
+        let upstream_addr = inner_state!(self, udp_upstream).unwrap();
+        let udp_server = UdpServer::bind_and_start(addr, upstream_addr, use_sync).await?;
+
+        let udp_server_addr = udp_server.local_addr().unwrap();
+        inner_state!(self, udp_upstream) = Some(udp_server_addr);
+        let proto = self.proto_as_string();
+
+        info!("==========================================================");
+        info!("udp server bound to: {udp_server_addr}, type: {proto}");
+        info!("==========================================================");
+
+        self.post_server_info(ServerInfo::new(
+            ServerInfoType::ProxyMessage,
+            Box::new(format!(
+                "udp server bound to: {udp_server_addr}, type: {proto}"
+            )),
+        ));
+
+        Ok(udp_server)
     }
 
     async fn start_quic_client(
@@ -250,12 +357,25 @@ impl Server {
         quic_server_addr: NetAddr,
         common_quic_config: CommonQuicConfig,
     ) -> Result<JoinHandle<()>> {
+        // if we have to forward tcp/udp through quic tunnel, we can directly use the
+        // quic client's tcp/udp entry without creating another layer of traffic relay
+        let server_addr = &self.config.server_addr;
+        let (tcp_server_addr, udp_server_addr) = if server_addr.proto == Some(ProtoType::Udp) {
+            (None, server_addr.net_addr.to_socket_addr())
+        } else if server_addr.proto == Some(ProtoType::Tcp) {
+            (server_addr.net_addr.to_socket_addr(), None)
+        } else {
+            (
+                Some(local_socket_addr(server_addr.net_addr.is_ipv6())),
+                None,
+            )
+        };
+
         // with +quic protocols, quic_client will be used to connect to the upstream
         let quic_client_config = QuicClientConfig {
             server_addr: quic_server_addr,
-            local_tcp_server_addr: local_socket_addr_with_unspecified_port(
-                self.config.addr.is_ipv6(),
-            ),
+            local_tcp_server_addr: tcp_server_addr,
+            local_udp_server_addr: udp_server_addr,
             common_cfg: common_quic_config,
         };
 
@@ -267,41 +387,45 @@ impl Server {
                 info_bridge.post_server_log(data);
             });
         }
-        client.start_tcp_server().await?;
 
-        let tcp_server_addr = client.tcp_server_addr();
-        info!("QUIC tunnel access server address: {:?}", tcp_server_addr);
+        let (require_tcp, require_udp) = self.is_tcp_or_udp_server_required();
+
+        if require_tcp {
+            let tcp_server_addr = client.start_tcp_server().await?;
+            inner_state!(self, tcp_upstream) = Some(tcp_server_addr);
+            info!("started quic tcp server: {tcp_server_addr}");
+        }
+
+        if require_udp {
+            let udp_server_addr = client.start_udp_server().await?;
+            inner_state!(self, udp_upstream) = Some(udp_server_addr);
+            info!("started quic udp server: {udp_server_addr}");
+        }
 
         // will handover the handle to the caller, so we don't block here
         let join_handle = client.connect_and_serve_async();
 
-        inner_state!(self, upstream) = tcp_server_addr;
         inner_state!(self, quic_client) = Some(Arc::new(client));
 
         Ok(join_handle)
     }
 
-    fn serve_async(
-        self: &Arc<Self>,
-        proxy_listener: TcpListener,
-        dashboard_addr: Option<SocketAddr>,
-    ) -> JoinHandle<()> {
-        let mut this = self.clone();
-        tokio::spawn(async move { this.serve_internal(proxy_listener, dashboard_addr).await })
+    fn is_tcp_or_udp_server_required(&self) -> (bool, bool) {
+        self.config
+            .server_addr
+            .proto
+            .as_ref()
+            .map_or((true, false), |p| {
+                (*p != ProtoType::Udp, *p == ProtoType::Udp)
+            })
     }
 
-    async fn serve_internal(
-        self: &mut Arc<Self>,
-        proxy_listener: TcpListener,
-        dashboard_addr: Option<SocketAddr>,
-    ) {
+    async fn init_resolver(self: &mut Arc<Self>) {
         self.set_and_post_server_state(ServerState::ResolvingDNS);
 
-        let resolver = Self::create_dns_resolver(
-            self.config.dot_server.as_str(),
-            self.config.name_servers.as_str(),
-        )
-        .await;
+        let cfg = &self.config;
+        let resolver =
+            Self::create_dns_resolver(cfg.dot_server.as_str(), cfg.name_servers.as_str()).await;
 
         // always need a system resolver to resolve local domains
         let system_resolver = if resolver.resolver_type() == DNSResolverType::System {
@@ -317,12 +441,29 @@ impl Server {
 
         let resolver_type = resolver.resolver_type().to_string();
         inner_state!(self, dns_resolver) = Some(resolver);
+        inner_state!(self, system_dns_resolver) = Some(system_resolver);
 
         self.post_server_info(ServerInfo::new(
             ServerInfoType::ProxyDNSResolverType,
             Box::new(resolver_type),
         ));
+    }
 
+    fn serve(
+        self: &Arc<Self>,
+        proxy_listener: TcpListener,
+        dashboard_addr: Option<SocketAddr>,
+    ) -> JoinHandle<()> {
+        let mut this = self.clone();
+        tokio::spawn(async move { this.serve_internal(proxy_listener, dashboard_addr).await })
+    }
+
+    async fn serve_internal(
+        self: &mut Arc<Self>,
+        proxy_listener: TcpListener,
+        dashboard_addr: Option<SocketAddr>,
+    ) {
+        self.init_resolver().await;
         self.set_and_post_server_state(ServerState::Running);
 
         let (stats_sender, stats_receiver) = channel::<ServerStats>(TRAFFIC_DATA_QUEUE_SIZE);
@@ -331,26 +472,38 @@ impl Server {
         info!(
             "proxy server started listening, addr: {}, type: {}",
             proxy_listener.local_addr().unwrap(),
-            self.server_type_as_string()
+            self.proto_as_string()
         );
 
+        let cfg = &self.config;
         let psp = Arc::new(ProxySupportParams {
-            system_resolver,
-            server_type: self.config.server_type.clone(),
-            server_addr: self.config.addr,
-            upstream_type: self.config.upstream_type.clone(),
+            proto: cfg.server_addr.proto.clone(),
+            server_addr: cfg.server_addr.net_addr.to_socket_addr().unwrap(),
+            upstream_type: cfg.upstream_addr.as_ref().and_then(|u| u.proto.clone()),
             dashboard_addr,
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
             stats_sender,
-            tcp_nodelay: self.config.tcp_nodelay,
+            tcp_nodelay: cfg.tcp_nodelay,
         });
+
+        // if let Some(p) = cfg.server_addr.proto {
+        //     if p.is_udp_supported() {
+        //         let addr = cfg.upstream_udp.unwrap_or(cfg.upstream_addr);
+        //         let udp_server = UdpServer::bind_and_start(cfg.addr, upstream_addr, false).await;
+        //     }
+        // }
 
         loop {
             match proxy_listener.accept().await {
                 Ok((inbound_stream, _addr)) => {
                     let psp = psp.clone();
-                    let (prefer_upstream, upstream, dns_resolver) =
-                        copy_inner_state!(self, prefer_upstream, upstream, dns_resolver);
+                    let (prefer_upstream, upstream, dns_resolver, system_dns_resolver) = copy_inner_state!(
+                        self,
+                        prefer_upstream,
+                        tcp_upstream,
+                        dns_resolver,
+                        system_dns_resolver
+                    );
                     if psp.tcp_nodelay {
                         inbound_stream
                             .set_nodelay(true)
@@ -359,7 +512,7 @@ impl Server {
                     }
 
                     tokio::spawn(async move {
-                        if let Some(ProtoType::Tcp) = psp.server_type {
+                        if let Some(ProtoType::Tcp) = psp.proto {
                             if upstream.is_none() {
                                 error!("tcp connection requires an upstream");
                                 return;
@@ -383,6 +536,7 @@ impl Server {
                                 upstream,
                                 prefer_upstream,
                                 dns_resolver.unwrap(),
+                                system_dns_resolver.unwrap(),
                             )
                             .await
                             {
@@ -427,11 +581,11 @@ impl Server {
     }
 
     fn create_proxy_handler(
-        server_type: &Option<ProtoType>,
+        proto: &Option<ProtoType>,
         server_addr: SocketAddr,
         first_byte: u8,
     ) -> Box<dyn ProxyHandler + Send + Sync> {
-        match server_type {
+        match proto {
             Some(ProtoType::Socks5) => {
                 Box::new(SocksProxyHandler::new(SocksVersion::V5, server_addr))
             }
@@ -439,7 +593,9 @@ impl Server {
                 Box::new(SocksProxyHandler::new(SocksVersion::V4, server_addr))
             }
             Some(ProtoType::Http) => Box::new(HttpProxyHandler::new()),
-            Some(ProtoType::Tcp) => unreachable!("not valid proxy type"),
+            Some(ProtoType::Tcp) | Some(ProtoType::Udp) => {
+                unreachable!("not valid proxy type")
+            }
             None => {
                 match first_byte as char {
                     '\x05' => Box::new(SocksProxyHandler::new(SocksVersion::V5, server_addr)),
@@ -465,6 +621,7 @@ impl Server {
         upstream: Option<SocketAddr>,
         prefer_upstream: bool,
         resolver: Arc<DNSResolver>,
+        system_resolver: Arc<DNSResolver>,
     ) -> Result<(), ProxyError> {
         // this buffer must be big enough to receive SOCKS request
         let mut buffer = [0u8; 512];
@@ -478,7 +635,7 @@ impl Server {
 
             if proxy_handler.is_none() {
                 proxy_handler = Some(Self::create_proxy_handler(
-                    &params.server_type,
+                    &params.proto,
                     params.server_addr,
                     buffer[0],
                 ));
@@ -531,7 +688,9 @@ impl Server {
                             ProtoType::Http => OutboundType::HttpProxy,
                             ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
                             ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
-                            ProtoType::Tcp => unreachable!("not valid proxy type"),
+                            ProtoType::Tcp | ProtoType::Udp => {
+                                unreachable!("not valid proxy type")
+                            }
                         };
 
                         debug!(
@@ -555,7 +714,7 @@ impl Server {
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
                         let resolver = if addr.is_internal_domain() {
-                            &params.system_resolver
+                            &system_resolver
                         } else {
                             &resolver
                         };
@@ -686,9 +845,9 @@ impl Server {
         Some(stream)
     }
 
-    fn server_type_as_string(&self) -> String {
-        match self.config.server_type {
-            Some(ref server_type) => server_type.to_string(),
+    fn proto_as_string(&self) -> String {
+        match self.config.server_addr.proto {
+            Some(ref proto) => proto.to_string(),
             None => "HTTP|SOCKS5|SOCKS4".to_string(),
         }
     }
@@ -820,6 +979,21 @@ impl Server {
             Err(_) => Err(ProxyError::InternalError), // Connection mostly reset by peer
         }
     }
+
+    // async fn resolve_net_addr(&self, addr: &NetAddr) -> Result<SocketAddr> {
+    //     if addr.is_ip() {
+    //         return Ok(addr.to_socket_addr().unwrap());
+    //     }
+    //
+    //     let resolver = if addr.is_internal_domain() {
+    //         inner_state!(self, system_dns_resolver).clone()
+    //     } else {
+    //         inner_state!(self, dns_resolver).clone()
+    //     };
+    //
+    //     let ip_arr = resolver.unwrap().lookup(addr.unwrap_domain()).await?;
+    //     Ok(SocketAddr::new(*ip_arr.first().unwrap(), addr.port))
+    // }
 
     fn collect_and_report_server_stats(&self, mut stats_receiver: Receiver<ServerStats>) {
         let inner_state = self.inner_state.clone();
@@ -1009,13 +1183,13 @@ impl Api for Server {
 
         if dot_server.is_some() || name_servers.is_some() {
             ProxyServerConfig {
-                server_addr: cfg.server_addr_as_string(),
+                server_addr: cfg.server_addr.to_string(),
                 dot_server: dot_server.unwrap_or("".to_string()),
                 name_servers: name_servers.unwrap_or("".to_string()),
             }
         } else {
             ProxyServerConfig {
-                server_addr: cfg.server_addr_as_string(),
+                server_addr: cfg.server_addr.to_string(),
                 dot_server: cfg.dot_server.clone(),
                 name_servers: cfg.name_servers.clone(),
             }
@@ -1073,7 +1247,7 @@ impl Api for Server {
 
     async fn update_quic_tunnel_config(&self, config: QuicTunnelConfig) -> Result<()> {
         if let Some(ref qc) = inner_state!(self, quic_client) {
-            qc.stop().ok();
+            qc.stop();
         }
 
         let mut base_common_quic_config = self.common_quic_config.clone();
@@ -1094,8 +1268,7 @@ impl Api for Server {
 }
 
 struct ProxySupportParams {
-    system_resolver: Arc<DNSResolver>,
-    server_type: Option<ProtoType>,
+    proto: Option<ProtoType>,
     server_addr: SocketAddr,
     upstream_type: Option<ProtoType>,
     dashboard_addr: Option<SocketAddr>,

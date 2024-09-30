@@ -1,23 +1,28 @@
+use crate::QuicServerConfig;
 use anyhow::Result;
 use log::error;
-use std::{net::SocketAddr, sync::Arc};
-
-use crate::QuicServerConfig;
+use std::net::SocketAddr;
 
 pub struct QuicServer {
-    server: Arc<rstun::Server>,
+    server: rstun::Server,
 }
 
 impl QuicServer {
     pub fn new(quic_server_config: QuicServerConfig) -> Self {
+        log::info!(
+            "quic server, tcp_upstream:{:?}, udp_upstream:{:?}",
+            quic_server_config.tcp_upstream,
+            quic_server_config.udp_upstream
+        );
+
         let config = rstun::ServerConfig {
             addr: quic_server_config.server_addr.to_string(),
             password: quic_server_config.common_cfg.password.to_string(),
             cert_path: quic_server_config.common_cfg.cert.to_string(),
             key_path: quic_server_config.common_cfg.key.to_string(),
             max_idle_timeout_ms: quic_server_config.common_cfg.max_idle_timeout_ms,
-            tcp_upstreams: vec![quic_server_config.upstream_addr],
-            udp_upstreams: vec![],
+            default_tcp_upstream: quic_server_config.tcp_upstream,
+            default_udp_upstream: quic_server_config.udp_upstream,
             dashboard_server: "".to_string(),
             dashboard_server_credential: "".to_string(),
         };
@@ -34,7 +39,7 @@ impl QuicServer {
         self.server
             .serve()
             .await
-            .map_err(|e| error!("tunnel server failed: {}", e))
+            .map_err(|e| error!("tunnel server failed: {e}"))
             .ok();
     }
 }

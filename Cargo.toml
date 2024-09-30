@@ -28,13 +28,14 @@ lazy_static = "1.4"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
 # rstun = { path = "../rstun" }
-rstun = { git = "https://github.com/neevek/rstun", branch = "dev" }
+rstun = { git = "https://github.com/neevek/rstun" }
 hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"
 mime_guess = "2.0"
 monolithica = { git = "https://github.com/neevek/monolithica" }
 base64 = "0.22"
+dashmap = "6"
 
 [dev-dependencies]
 jni = "0.19"

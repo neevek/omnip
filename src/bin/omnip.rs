@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         cipher: args.cipher,
         max_idle_timeout_ms: args.max_idle_timeout_ms,
         retry_interval_ms: args.retry_interval_ms,
-        threads: args.threads,
+        workers: args.threads,
     };
 
     let mut server = Server::new(config, common_quic_config);
@@ -109,7 +109,7 @@ struct OmnipArgs {
     #[arg(short = 'a', long, required = true)]
     addr: String,
 
-    /// upstream which the proxy server will relay traffic to based on proxy rules,
+    /// Upstream which the proxy server will relay traffic to based on proxy rules,
     /// [<http|socks5|socks4>://]ip:port for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
     #[arg(short = 'u', long, default_value = "")]
     upstream: String,

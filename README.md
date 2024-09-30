@@ -48,7 +48,7 @@ Examples
 
     `omnip -a socks5://127.0.0.1:8000 -u http://192.168.50.50:9000`
 
-    omnip runs as a SOCKS5 proxy server, which forwards all the proxy requests to the upstream server specified with the `-u|--upstream` option, in this case it simply translates SOCKS5 proxy requests to HTTP proxy requests. the schemes of the upstream can be one of `http`, `socks5`, `socks4` and their QUIC counterparts `http+quic`, `http+socks5` and `http+socks4`.
+    omnip runs as a SOCKS5 proxy server, which forwards all the proxy requests to the upstream server specified with the `-u|--upstream` option, in this case it simply translates SOCKS5 proxy requests to HTTP proxy requests. the schemes of the upstream can be one of `http`, `socks5`, `socks4` and their QUIC counterparts `http+quic`, `socks5+quic` and `socks4+quic`.
 
 3. Running omnip as QUIC secured proxy server:
 

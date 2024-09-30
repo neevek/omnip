@@ -7,6 +7,7 @@ mod quic;
 mod server;
 mod server_info_bridge;
 mod socks;
+mod udp;
 mod utils;
 
 use anyhow::Context;
@@ -53,7 +54,7 @@ pub enum ProxyError {
     Disconnected(anyhow::Error),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub enum Host {
     IP(IpAddr),
     Domain(String),
@@ -68,7 +69,7 @@ impl Display for Host {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub struct NetAddr {
     pub host: Host,
     pub port: u16,
@@ -120,11 +121,26 @@ impl NetAddr {
         !self.is_domain()
     }
 
+    pub fn is_ipv6(&self) -> bool {
+        match self.host {
+            Host::IP(ip) => ip.is_ipv6(),
+            _ => false,
+        }
+    }
+
     pub fn unwrap_domain(&self) -> &str {
         if let Host::Domain(ref domain) = self.host {
             domain.as_str()
         } else {
             panic!("not a domain")
+        }
+    }
+
+    pub fn unwrap_ip(&self) -> IpAddr {
+        if let Host::IP(ref ip) = self.host {
+            *ip
+        } else {
+            panic!("not an IP")
         }
     }
 
@@ -161,7 +177,7 @@ impl NetAddr {
         match self.host {
             Host::IP(ip) => Some(SocketAddr::new(ip, self.port)),
             _ => {
-                warn!("{} is not an IP address", self);
+                warn!("{self} is not an IP address");
                 None
             }
         }
@@ -182,12 +198,12 @@ impl std::fmt::Display for NetAddr {
 impl FromStr for NetAddr {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let colon_pos = s.rfind(":").context("port required")?;
+        let colon_pos = s.rfind(':').context("port required")?;
         let port = s[(colon_pos + 1)..]
             .parse::<u16>()
             .context("invalid port")?;
 
-        if let Some(pos) = s.rfind("]") {
+        if let Some(pos) = s.rfind(']') {
             if pos + 1 != colon_pos {
                 bail!("invalid ipv6 address: {s}");
             }
@@ -204,6 +220,7 @@ pub enum ProtoType {
     Socks5,
     Socks4,
     Tcp,
+    Udp,
 }
 
 impl ProtoType {
@@ -237,6 +254,13 @@ impl ProtoType {
                     "tcp"
                 }
             }
+            ProtoType::Udp => {
+                if combine_layer_proto {
+                    "udp+quic"
+                } else {
+                    "udp"
+                }
+            }
         }
         .to_string()
     }
@@ -249,30 +273,48 @@ impl std::fmt::Display for ProtoType {
             ProtoType::Socks5 => "SOCKS5",
             ProtoType::Socks4 => "SOCKS4",
             ProtoType::Tcp => "TCP",
+            ProtoType::Udp => "UDP",
         };
         formatter.write_fmt(format_args!("{}", msg))
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub enum LayeredProtoType {
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub enum QuicProtoType {
     HttpOverQuic,
     Socks5OverQuic,
     Socks4OverQuic,
     TcpOverQuic,
+    UdpOverQuic,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ServerAddr {
+    pub proto: Option<ProtoType>,
+    pub net_addr: NetAddr,
+    pub is_quic_proto: bool,
+}
+
+impl Display for ServerAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.proto {
+            Some(pt) => f.write_fmt(format_args!(
+                "{}://{}",
+                pt.format_as_string(self.is_quic_proto),
+                self.net_addr
+            )),
+            None => f.write_fmt(format_args!("{}", self.net_addr)),
+        }
+    }
 }
 
 #[serde_with::skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
-    pub server_type: Option<ProtoType>,
-    pub addr: SocketAddr,
-    pub is_layered_proto: bool,
-    pub upstream_type: Option<ProtoType>,
-    pub upstream_addr: Option<NetAddr>,
-    pub is_upstream_layered_proto: bool,
+    server_addr: ServerAddr,
+    upstream_addr: Option<ServerAddr>,
     pub proxy_rules_file: String,
-    pub threads: usize,
+    pub workers: usize,
     pub dot_server: String,
     pub name_servers: String,
     pub watch_proxy_rules_change: bool,
@@ -282,14 +324,24 @@ pub struct Config {
 #[derive(Debug)]
 pub struct QuicServerConfig {
     pub server_addr: SocketAddr,
-    pub upstream_addr: SocketAddr,
+    pub tcp_upstream: Option<SocketAddr>,
+    pub udp_upstream: Option<SocketAddr>,
     pub common_cfg: CommonQuicConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct QuicClientConfig {
     pub server_addr: NetAddr,
-    pub local_tcp_server_addr: SocketAddr,
+    pub local_tcp_server_addr: Option<SocketAddr>,
+    pub local_udp_server_addr: Option<SocketAddr>,
+    pub common_cfg: CommonQuicConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct AddressMapping {
+    pub server_addr: NetAddr,
+    pub local_tcp_server_addr: Option<SocketAddr>,
+    pub local_udp_server_addr: Option<SocketAddr>,
     pub common_cfg: CommonQuicConfig,
 }
 
@@ -301,40 +353,48 @@ pub struct CommonQuicConfig {
     pub password: String,
     pub max_idle_timeout_ms: u64,
     pub retry_interval_ms: u64,
-    pub threads: usize,
+    pub workers: usize,
 }
 
-impl Config {
-    pub fn server_addr_as_string(&self) -> String {
-        match self.server_type {
-            Some(ref pt) => format!(
-                "{}://{}",
-                pt.format_as_string(self.is_layered_proto),
-                self.addr
-            ),
-            None => self.addr.to_string(),
-        }
-    }
+// impl Config {
+//     pub fn server_addr_as_string(&self) -> String {
+//         match self.server_type {
+//             Some(ref pt) => format!(
+//                 "{}://{}",
+//                 pt.format_as_string(self.is_quic_proto),
+//                 self.addr
+//             ),
+//             None => self.addr.to_string(),
+//         }
+//     }
+//
+//     pub fn upstream_as_string(&self) -> String {
+//         match self.upstream_addr {
+//             Some(ref upstream_addr) => {
+//                 let proto = match self.upstream_type {
+//                     Some(ref pt) => pt.format_as_string(self.is_upstream_quic_proto),
+//                     None => "".to_string(),
+//                 };
+//                 format!("{}://{}", proto, upstream_addr.to_string())
+//             }
+//             None => "".to_string(),
+//         }
+//     }
+// }
 
-    pub fn upstream_as_string(&self) -> String {
-        match self.upstream_addr {
-            Some(ref upstream_addr) => {
-                let proto = match self.upstream_type {
-                    Some(ref pt) => pt.format_as_string(self.is_upstream_layered_proto),
-                    None => "".to_string(),
-                };
-                format!("{}://{}", proto, upstream_addr.to_string())
-            }
-            None => "".to_string(),
-        }
-    }
-}
-
-pub fn local_socket_addr_with_unspecified_port(ipv6: bool) -> SocketAddr {
+pub fn local_socket_addr(ipv6: bool) -> SocketAddr {
     if ipv6 {
         SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)
     } else {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+    }
+}
+
+pub fn unspecified_socket_addr(ipv6: bool) -> SocketAddr {
+    if ipv6 {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+    } else {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
     }
 }
 
@@ -351,131 +411,147 @@ pub fn parse_socket_addr(addr: &str) -> Option<SocketAddr> {
 }
 
 #[rustfmt::skip]
-pub fn parse_server_addr(
-    addr: &str,
-) -> (
-    Option<ProtoType>,
-    Option<NetAddr>,
-    bool // is_layered_proto
-) {
+pub fn parse_server_addr(addr: &str) -> Result<Option<ServerAddr>> {
     if addr.trim().is_empty() {
-        return (None, None, false);
+        return Ok(None);
     }
 
-    let supported_protocols: &[(Option<ProtoType>, Option<LayeredProtoType>, &str)] = &[
+    let supported_protocols: &[(Option<ProtoType>, Option<QuicProtoType>, &str)] = &[
         (None, None, "unspecified"),
         (Some(ProtoType::Http), None, "http"),
         (Some(ProtoType::Socks5), None, "socks5"),
         (Some(ProtoType::Socks4), None, "socks4"),
         (Some(ProtoType::Tcp), None, "tcp"),
-        (Some(ProtoType::Http), Some(LayeredProtoType::HttpOverQuic), "http+quic"),
-        (Some(ProtoType::Socks5), Some(LayeredProtoType::Socks5OverQuic), "socks5+quic"),
-        (Some(ProtoType::Socks4), Some(LayeredProtoType::Socks4OverQuic), "socks4+quic"),
-        (Some(ProtoType::Tcp), Some(LayeredProtoType::TcpOverQuic), "tcp+quic"),
+        (Some(ProtoType::Udp), None, "udp"),
+        (Some(ProtoType::Http), Some(QuicProtoType::HttpOverQuic), "http+quic"),
+        (Some(ProtoType::Socks5), Some(QuicProtoType::Socks5OverQuic), "socks5+quic"),
+        (Some(ProtoType::Socks4), Some(QuicProtoType::Socks4OverQuic), "socks4+quic"),
+        (Some(ProtoType::Tcp), Some(QuicProtoType::TcpOverQuic), "tcp+quic"),
+        (Some(ProtoType::Udp), Some(QuicProtoType::UdpOverQuic), "udp+quic"),
     ];
 
-    let addr = if addr.contains("://") {
-        addr.to_string()
-    } else {
-        if addr.rfind(']').is_none() && addr.find(':').is_none() {
-            format!("unspecified://127.0.0.1:{}", addr)
-        } else {
-            format!("unspecified://{}", addr)
-        }
-    };
-
+    let addr = format_addr(addr, "127.0.0.1")?;
     let url = match Url::parse(addr.as_str()) {
         Ok(url) => url,
         _ => {
-            error!("invalid server protocol, address: {}", addr);
-            return (None, None, false);
+            log_and_bail!("invalid protocol: {addr}");
         }
     };
 
     if !url.has_host() {
-        error!("invalid server address: {}", addr);
-        return (None, None, false);
+        log_and_bail!("invalid address: {addr}");
     }
 
-    let mut server_type = None;
-    let mut layered_type = None;
+    let mut serv_proto = None;
+    let mut quic_proto = None;
     supported_protocols.iter().for_each(|v| {
         if url.scheme() == v.2 {
-            server_type = v.0.clone();
-            layered_type = v.1.clone();
+            serv_proto = v.0.clone();
+            quic_proto = v.1.clone();
         }
     });
 
-    if url.scheme() != "unspecified" && server_type.is_none() {
-        error!("invalid scheme: {}", url.scheme());
-        return (None, None, false);
+    if url.scheme() != "unspecified" && serv_proto.is_none() {
+        log_and_bail!("invalid scheme: {}", url.scheme());
     }
 
-    (
-        server_type,
-        Some(NetAddr::new(
-            url.host().unwrap().to_string().as_str(),
-            url.port_or_known_default().unwrap(),
-        )),
-        layered_type.is_some()
-    )
+    let net_addr = NetAddr::new(
+        url.host().unwrap().to_string().as_str(),
+        url.port_or_known_default().unwrap(),
+    );
+
+    Ok(Some(ServerAddr{
+        proto: serv_proto,
+        net_addr,
+        is_quic_proto: quic_proto.is_some(),
+    }))
 }
 
+fn format_addr(addr: &str, default_ip: &str) -> Result<String> {
+    let addr = if addr.contains("://") {
+        addr.to_string()
+    } else if addr.starts_with('[') && !addr.contains("]:") {
+        log_and_bail!("Server address must contain a port, e.g. [::1]:3515");
+    } else if addr.contains('.') && !addr.contains(':') {
+        log_and_bail!("Server address must contain a port, e.g. 127.0.0.1:3515");
+    } else if !addr.contains(':') {
+        format!("unspecified://{default_ip}:{addr}")
+    } else {
+        format!("unspecified://{addr}")
+    };
+    Ok(addr)
+}
+
+#[rustfmt::skip]
 pub fn create_config(
-    addr: String,
-    upstream: String,
+    server_addr: String,
+    upstream_addr: String,
     dot_server: String,
     name_servers: String,
     proxy_rules_file: String,
-    threads: usize,
+    workers: usize,
     watch_proxy_rules_change: bool,
     tcp_nodelay: bool,
 ) -> Result<Config> {
-    let (server_type, orig_server_addr, is_layered_proto) = parse_server_addr(addr.as_str());
-
-    let server_addr = match match orig_server_addr {
-        Some(ref server_addr) => server_addr.to_socket_addr(),
-        None => None,
-    } {
+    let server_addr = match parse_server_addr(&server_addr)? {
         Some(server_addr) => server_addr,
         None => {
-            log_and_bail!("server addr must be an IP address: {:?}", addr);
+            log_and_bail!("invalid server address: {server_addr}");
         }
     };
 
-    let (upstream_type, upstream_addr, is_upstream_layered_proto) =
-        parse_server_addr(upstream.as_str());
-    if !upstream.is_empty() && upstream_type.is_none() {
-        log_and_bail!("invalid upstream address: {}", upstream);
-    }
+    let upstream_addr = parse_server_addr(&upstream_addr)?;
 
-    if is_layered_proto && is_upstream_layered_proto {
-        log_and_bail!(
-            "QUIC server and QUIC upstream cannot be chained: {} -> {:?}",
-            server_addr,
-            upstream_addr
-        );
-    } else if let Some(ref upstream) = upstream_addr {
-        if upstream.is_domain() && !is_upstream_layered_proto {
-            log_and_bail!("only IP address is allowed for upstream with non-layered protocols, invalid upstream: {}", upstream);
+    #[allow(warnings)]
+    if let Some(upstream_addr) = &upstream_addr {
+        if server_addr.is_quic_proto && upstream_addr.is_quic_proto {
+            log_and_bail!(
+                "QUIC server and QUIC upstream cannot be chained: {} -> {upstream_addr}",
+                server_addr.net_addr.to_socket_addr().unwrap()
+            );
+        }
+
+        if upstream_addr.net_addr.is_domain() && !upstream_addr.is_quic_proto {
+            log_and_bail!("only IP address is allowed for upstream with non-quic protocols, invalid upstream: {upstream_addr}");
         }
     }
 
-    let worker_threads = if threads > 0 {
-        threads
+    match (server_addr.proto.clone(), upstream_addr.as_ref().and_then(|u| u.proto.clone())) {
+        (None, Some(ProtoType::Http)) |
+        (None, Some(ProtoType::Socks5)) |
+        (None, Some(ProtoType::Socks4)) |
+        (Some(ProtoType::Http), Some(ProtoType::Http)) |
+        (Some(ProtoType::Http), Some(ProtoType::Socks5)) |
+        (Some(ProtoType::Http), Some(ProtoType::Socks4)) |
+        (Some(ProtoType::Http), None) |
+        (Some(ProtoType::Socks5), Some(ProtoType::Http)) |
+        (Some(ProtoType::Socks5), Some(ProtoType::Socks5)) |
+        (Some(ProtoType::Socks5), Some(ProtoType::Socks4)) |
+        (Some(ProtoType::Socks5), None) |
+        (Some(ProtoType::Socks4), Some(ProtoType::Http)) |
+        (Some(ProtoType::Socks4), Some(ProtoType::Socks5)) |
+        (Some(ProtoType::Socks4), Some(ProtoType::Socks4)) |
+        (Some(ProtoType::Socks4), None) |
+        (Some(ProtoType::Tcp), Some(ProtoType::Tcp)) |
+        (Some(ProtoType::Udp), Some(ProtoType::Udp)) |
+        (None, None) => {}
+        _ => {
+            log_and_bail!("proto chaining not supported: {server_addr} →  {:?}",
+                upstream_addr.as_ref().map_or("".to_string(), |u| u.net_addr.to_string()));
+        }
+    }
+
+    let worker_threads = if workers > 0 {
+        workers
     } else {
         num_cpus::get()
     };
 
     Ok(Config {
-        server_type,
-        addr: server_addr,
-        is_layered_proto,
-        upstream_type,
+        server_addr,
         upstream_addr,
-        is_upstream_layered_proto,
         proxy_rules_file,
-        threads: worker_threads,
+        workers: worker_threads,
         dot_server,
         name_servers,
         watch_proxy_rules_change,
@@ -535,7 +611,7 @@ pub mod android {
         jpassword: JString,
         jmaxIdleTimeoutMs: jint,
         jretryIntervalMs: jint,
-        jthreads: jint,
+        jworkers: jint,
         jtcpNoDelay: jboolean,
     ) -> jlong {
         if jaddr.is_null() {
@@ -558,7 +634,7 @@ pub mod android {
             dot_server,
             name_servers,
             proxy_rules_file,
-            jthreads as usize,
+            jworkers as usize,
             false,
             jtcpNoDelay != 0,
         ) {
@@ -576,7 +652,7 @@ pub mod android {
             cipher,
             max_idle_timeout_ms: jmaxIdleTimeoutMs as u64,
             retry_interval_ms: jretryIntervalMs as u64,
-            threads: jthreads as usize,
+            workers: jworkers as usize,
         };
 
         Box::into_raw(Box::new(Server::new(config, common_quic_config))) as jlong
