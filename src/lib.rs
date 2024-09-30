@@ -204,6 +204,8 @@ pub enum ProtoType {
     Socks5,
     Socks4,
     Tcp,
+    Udp,
+    Dual, // both Tcp and Udp
 }
 
 impl ProtoType {
@@ -237,6 +239,20 @@ impl ProtoType {
                     "tcp"
                 }
             }
+            ProtoType::Udp => {
+                if combine_layer_proto {
+                    "udp+quic"
+                } else {
+                    "udp"
+                }
+            }
+            ProtoType::Dual => {
+                if combine_layer_proto {
+                    "dual+quic"
+                } else {
+                    "dual"
+                }
+            }
         }
         .to_string()
     }
@@ -249,6 +265,8 @@ impl std::fmt::Display for ProtoType {
             ProtoType::Socks5 => "SOCKS5",
             ProtoType::Socks4 => "SOCKS4",
             ProtoType::Tcp => "TCP",
+            ProtoType::Udp => "UDP",
+            ProtoType::Dual => "DUAL(TCP+UDP)",
         };
         formatter.write_fmt(format_args!("{}", msg))
     }
@@ -260,6 +278,8 @@ pub enum LayeredProtoType {
     Socks5OverQuic,
     Socks4OverQuic,
     TcpOverQuic,
+    UdpOverQuic,
+    DualOverQuic,
 }
 
 #[serde_with::skip_serializing_none]
@@ -368,20 +388,22 @@ pub fn parse_server_addr(
         (Some(ProtoType::Socks5), None, "socks5"),
         (Some(ProtoType::Socks4), None, "socks4"),
         (Some(ProtoType::Tcp), None, "tcp"),
+        (Some(ProtoType::Udp), None, "udp"),
+        (Some(ProtoType::Dual), None, "dual"),
         (Some(ProtoType::Http), Some(LayeredProtoType::HttpOverQuic), "http+quic"),
         (Some(ProtoType::Socks5), Some(LayeredProtoType::Socks5OverQuic), "socks5+quic"),
         (Some(ProtoType::Socks4), Some(LayeredProtoType::Socks4OverQuic), "socks4+quic"),
         (Some(ProtoType::Tcp), Some(LayeredProtoType::TcpOverQuic), "tcp+quic"),
+        (Some(ProtoType::Udp), Some(LayeredProtoType::UdpOverQuic), "udp+quic"),
+        (Some(ProtoType::Dual), Some(LayeredProtoType::DualOverQuic), "dual+quic"),
     ];
 
     let addr = if addr.contains("://") {
         addr.to_string()
+    } else if addr.rfind(']').is_none() && addr.find(':').is_none() {
+        format!("unspecified://127.0.0.1:{}", addr)
     } else {
-        if addr.rfind(']').is_none() && addr.find(':').is_none() {
-            format!("unspecified://127.0.0.1:{}", addr)
-        } else {
-            format!("unspecified://{}", addr)
-        }
+        format!("unspecified://{}", addr)
     };
 
     let url = match Url::parse(addr.as_str()) {

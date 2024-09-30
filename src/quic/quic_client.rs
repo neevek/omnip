@@ -1,14 +1,14 @@
+use crate::QuicClientConfig;
 use anyhow::Result;
 use rstun::Upstream;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 
-use crate::QuicClientConfig;
-
 pub struct QuicClient {
     client: Arc<rstun::Client>,
     server_addr: String,
     tcp_server_addr: Option<SocketAddr>,
+    udp_server_addr: Option<SocketAddr>,
 }
 
 impl QuicClient {
@@ -20,11 +20,17 @@ impl QuicClient {
             client: rstun::Client::new(config.clone()),
             server_addr,
             tcp_server_addr: None,
+            udp_server_addr: None,
         }
     }
 
     pub async fn start_tcp_server(&mut self) -> Result<()> {
         self.tcp_server_addr = self.client.start_tcp_server().await?;
+        Ok(())
+    }
+
+    pub async fn start_udp_server(&mut self) -> Result<()> {
+        self.udp_server_addr = self.client.start_udp_server().await?;
         Ok(())
     }
 
@@ -48,8 +54,12 @@ impl QuicClient {
         self.server_addr.clone()
     }
 
-    pub fn tcp_server_addr(&self) -> Option<SocketAddr> {
+    pub fn get_tcp_server_addr(&self) -> Option<SocketAddr> {
         self.tcp_server_addr
+    }
+
+    pub fn get_udp_server_addr(&self) -> Option<SocketAddr> {
+        self.udp_server_addr
     }
 
     pub fn get_state(&self) -> rstun::ClientState {
@@ -69,7 +79,7 @@ impl QuicClient {
         config.login_msg = Some(rstun::TunnelMessage::ReqOutLogin(rstun::LoginInfo {
             password: quic_client_config.common_cfg.password.clone(),
             tcp_upstream: Upstream::PeerDefault,
-            udp_upstream: Upstream::NotSpecified,
+            udp_upstream: Upstream::PeerDefault,
         }))
     }
 }

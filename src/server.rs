@@ -269,8 +269,8 @@ impl Server {
         }
         client.start_tcp_server().await?;
 
-        let tcp_server_addr = client.tcp_server_addr();
-        info!("QUIC tunnel access server address: {:?}", tcp_server_addr);
+        let tcp_server_addr = client.get_tcp_server_addr();
+        info!("QUIC tunnel tcp server address: {:?}", tcp_server_addr);
 
         // will handover the handle to the caller, so we don't block here
         let join_handle = client.connect_and_serve_async();
@@ -411,6 +411,8 @@ impl Server {
             }
         }
     }
+
+    async fn seave_udp_proxy(self: &mut Arc<Self>, use_async: bool) {}
 
     async fn create_dns_resolver(dot_server: &str, name_servers: &str) -> Arc<DNSResolver> {
         Arc::new(
