@@ -106,12 +106,12 @@ fn print_args_as_base64(args: &OmnipArgs) -> bool {
 struct OmnipArgs {
     /// Server address [<tcp|http|socks5|socks4|tcp+quic|http+quic|socks5+quic|socks4+quic>://][ip:]port
     /// for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
-    #[arg(short = 'a', long, required = true)]
+    #[arg(short = 'a', long, verbatim_doc_comment, required = true)]
     addr: String,
 
     /// Upstream which the proxy server will relay traffic to based on proxy rules,
     /// [<http|socks5|socks4>://]ip:port for example: http://127.0.0.1:8000, http+quic://127.0.0.1:8000
-    #[arg(short = 'u', long, default_value = "")]
+    #[arg(short = 'u', long, verbatim_doc_comment, default_value = "")]
     upstream: String,
 
     /// Path to the proxy rules file
@@ -128,39 +128,39 @@ struct OmnipArgs {
 
     /// comma saprated domain servers (E.g. 1.1.1.1,8.8.8.8), which will be used
     /// if no dot_server is specified, or system default if empty
-    #[arg(long, default_value = "")]
+    #[arg(long, verbatim_doc_comment, default_value = "")]
     name_servers: String,
 
     /// Applicable only for +quic protocols
     /// Path to the certificate file, if empty, a self-signed certificate
     /// with the domain "localhost" will be used
-    #[arg(short = 'c', long, default_value = "")]
+    #[arg(short = 'c', long, verbatim_doc_comment, default_value = "")]
     cert: String,
 
     /// Applicable only for +quic protocols
     /// Path to the key file, can be empty if no cert is provided
-    #[arg(short = 'k', long, default_value = "")]
+    #[arg(short = 'k', long, verbatim_doc_comment, default_value = "")]
     key: String,
 
     /// Applicable only for +quic protocols
     /// Password of the +quic server
-    #[arg(short = 'p', long, default_value = "")]
+    #[arg(short = 'p', long, verbatim_doc_comment, default_value = "")]
     password: String,
 
     /// Applicable only for +quic protocols
     /// Cipher for encryption
-    #[arg(short = 'e', long, default_value_t = String::from(rstun::SUPPORTED_CIPHER_SUITE_STRS[0]),
+    #[arg(short = 'e', long, verbatim_doc_comment, default_value_t = String::from(rstun::SUPPORTED_CIPHER_SUITE_STRS[0]),
         value_parser = PossibleValuesParser::new(rstun::SUPPORTED_CIPHER_SUITE_STRS).map(|v| v.to_string()))]
     cipher: String,
 
     /// Applicable only for quic protocol as upstream
     /// Max idle timeout for the QUIC connections
-    #[arg(short = 'i', long, default_value = "120000")]
+    #[arg(short = 'i', long, verbatim_doc_comment, default_value = "120000")]
     max_idle_timeout_ms: u64,
 
     /// Applicable only for quic protocol as upstream
     /// Max idle timeout for the QUIC connections
-    #[arg(short = 'R', long, default_value = "5000")]
+    #[arg(short = 'R', long, verbatim_doc_comment, default_value = "5000")]
     retry_interval_ms: u64,
 
     /// Set TCP_NODELAY
@@ -185,7 +185,7 @@ struct OmnipArgs {
 
     /// Print the args as base64 string to be used in opp:// address, will be ignored if passing in
     /// as an opp:// address, which can combine all args as a single base64 string
-    #[arg(short = 'E', long, action)]
+    #[arg(short = 'E', long, verbatim_doc_comment, action)]
     encode_base64: bool,
 
     /// Decode and print the base64 encoded opp:// address
