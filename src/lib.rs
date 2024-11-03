@@ -335,6 +335,8 @@ pub struct QuicClientConfig {
     pub local_tcp_server_addr: Option<SocketAddr>,
     pub local_udp_server_addr: Option<SocketAddr>,
     pub common_cfg: CommonQuicConfig,
+    pub dot_servers: Vec<String>,
+    pub name_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

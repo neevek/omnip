@@ -359,7 +359,8 @@ impl Server {
     ) -> Result<JoinHandle<()>> {
         // if we have to forward tcp/udp through quic tunnel, we can directly use the
         // quic client's tcp/udp entry without creating another layer of traffic relay
-        let server_addr = &self.config.server_addr;
+        let cfg = &self.config;
+        let server_addr = &cfg.server_addr;
         let (tcp_server_addr, udp_server_addr) = if server_addr.proto == Some(ProtoType::Udp) {
             (None, server_addr.net_addr.to_socket_addr())
         } else if server_addr.proto == Some(ProtoType::Tcp) {
@@ -371,12 +372,18 @@ impl Server {
             )
         };
 
+        #[allow(warnings)]
+        let dot_servers = cfg.dot_server.split(',').map(String::from).collect();
+        let name_servers = cfg.name_servers.split(',').map(String::from).collect();
+
         // with +quic protocols, quic_client will be used to connect to the upstream
         let quic_client_config = QuicClientConfig {
             server_addr: quic_server_addr,
             local_tcp_server_addr: tcp_server_addr,
             local_udp_server_addr: udp_server_addr,
             common_cfg: common_quic_config,
+            dot_servers,
+            name_servers,
         };
 
         let mut client = QuicClient::new(quic_client_config);

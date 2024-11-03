@@ -71,6 +71,7 @@ impl QuicClient {
         } else {
             None
         };
-        // TODO specify DoT or dns servers to resolve the server domain
+        config.dot_servers = quic_client_config.dot_servers.clone();
+        config.dns_servers = quic_client_config.name_servers.clone();
     }
 }
