@@ -54,6 +54,7 @@ impl QuicClient {
     fn set_config(config: &mut rstun::ClientConfig, quic_client_config: &QuicClientConfig) {
         config.server_addr = quic_client_config.server_addr.to_string();
         config.mode = rstun::TUNNEL_MODE_OUT;
+        config.password = quic_client_config.common_cfg.password.clone();
         config.cert_path = quic_client_config.common_cfg.cert.clone();
         config.cipher = quic_client_config.common_cfg.cipher.clone();
         config.max_idle_timeout_ms = quic_client_config.common_cfg.max_idle_timeout_ms;
