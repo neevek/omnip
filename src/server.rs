@@ -976,31 +976,22 @@ impl Server {
                 Ok(0)
             }
             Ok(n) => {
+                // this method is used as a select! branch, use while loop to write the data
+                // instead of using write_all (which is not cancellation safe) to ensure
+                // the code cancellation safe
+                let mut written_bytes = 0;
+                while written_bytes < n {
+                    written_bytes += writer
+                        .write(&buffer[written_bytes..n])
+                        .await
+                        .map_err(|_| ProxyError::InternalError)?;
+                }
                 *out_bytes += n as u64;
-                writer
-                    .write_all(&buffer[..n])
-                    .await
-                    .map_err(|_| ProxyError::InternalError)?;
                 Ok(n)
             }
             Err(_) => Err(ProxyError::InternalError), // Connection mostly reset by peer
         }
     }
-
-    // async fn resolve_net_addr(&self, addr: &NetAddr) -> Result<SocketAddr> {
-    //     if addr.is_ip() {
-    //         return Ok(addr.to_socket_addr().unwrap());
-    //     }
-    //
-    //     let resolver = if addr.is_internal_domain() {
-    //         inner_state!(self, system_dns_resolver).clone()
-    //     } else {
-    //         inner_state!(self, dns_resolver).clone()
-    //     };
-    //
-    //     let ip_arr = resolver.unwrap().lookup(addr.unwrap_domain()).await?;
-    //     Ok(SocketAddr::new(*ip_arr.first().unwrap(), addr.port))
-    // }
 
     fn collect_and_report_server_stats(&self, mut stats_receiver: Receiver<ServerStats>) {
         let inner_state = self.inner_state.clone();
