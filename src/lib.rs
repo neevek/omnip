@@ -319,6 +319,8 @@ pub struct Config {
     pub name_servers: String,
     pub watch_proxy_rules_change: bool,
     pub tcp_nodelay: bool,
+    pub tcp_timeout_ms: u64,
+    pub udp_timeout_ms: u64,
 }
 
 #[derive(Debug)]
@@ -353,7 +355,9 @@ pub struct CommonQuicConfig {
     pub key: String,
     pub cipher: String,
     pub password: String,
-    pub max_idle_timeout_ms: u64,
+    pub quic_timeout_ms: u64,
+    pub tcp_timeout_ms: u64,
+    pub udp_timeout_ms: u64,
     pub retry_interval_ms: u64,
     pub workers: usize,
 }
@@ -494,6 +498,8 @@ pub fn create_config(
     workers: usize,
     watch_proxy_rules_change: bool,
     tcp_nodelay: bool,
+    tcp_timeout_ms: u64,
+    udp_timeout_ms: u64,
 ) -> Result<Config> {
     let server_addr = match parse_server_addr(&server_addr)? {
         Some(server_addr) => server_addr,
@@ -558,6 +564,8 @@ pub fn create_config(
         name_servers,
         watch_proxy_rules_change,
         tcp_nodelay,
+        tcp_timeout_ms,
+        udp_timeout_ms
     })
 }
 
@@ -611,7 +619,7 @@ pub mod android {
         jkey: JString,
         jcipher: JString,
         jpassword: JString,
-        jmaxIdleTimeoutMs: jint,
+        jquicTimeoutMs: jint,
         jretryIntervalMs: jint,
         jworkers: jint,
         jtcpNoDelay: jboolean,
@@ -652,7 +660,7 @@ pub mod android {
             key,
             password,
             cipher,
-            max_idle_timeout_ms: jmaxIdleTimeoutMs as u64,
+            quic_timeout_ms: jquicTimeoutMs as u64,
             retry_interval_ms: jretryIntervalMs as u64,
             workers: jworkers as usize,
         };

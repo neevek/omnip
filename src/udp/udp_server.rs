@@ -24,6 +24,7 @@ impl UdpServer {
         server_addr: SocketAddr,
         upstream_addr: SocketAddr,
         use_sync: bool,
+        udp_timeout_ms: u64,
     ) -> Result<Self> {
         let serv_sock = Arc::new(UdpSocket::bind(server_addr).await?);
 
@@ -41,7 +42,9 @@ impl UdpServer {
                     Ok((size, addr)) => {
                         tokio::spawn(async move {
                             let state = state.lock().unwrap().clone();
-                            let sock = Self::open_udp_socket(&state, addr, upstream_addr).await?;
+                            let sock =
+                                Self::open_udp_socket(&state, addr, upstream_addr, udp_timeout_ms)
+                                    .await?;
                             sock.send(&buf[..size]).await.ok();
                             Ok::<(), anyhow::Error>(())
                         });
@@ -66,6 +69,7 @@ impl UdpServer {
         state: &State,
         inbound_addr: SocketAddr,
         outbound_addr: SocketAddr,
+        udp_timeout_ms: u64,
     ) -> Result<Arc<UdpSocket>> {
         if let Some(s) = state.sock_map.get(&inbound_addr) {
             return Ok((*s).clone());
@@ -87,7 +91,11 @@ impl UdpServer {
             );
             loop {
                 let mut buf = BUFFER_POOL.alloc_and_fill(UDP_PACKET_SIZE);
-                match tokio::time::timeout(Duration::from_secs(5), udp_socket.recv(&mut buf)).await
+                match tokio::time::timeout(
+                    Duration::from_millis(udp_timeout_ms),
+                    udp_socket.recv(&mut buf),
+                )
+                .await
                 {
                     Ok(Ok(size)) => {
                         unsafe {

@@ -122,9 +122,13 @@ Options:
   -e, --cipher <CIPHER>
           Applicable only for +quic protocols
           Cipher for encryption [default: chacha20-poly1305] [possible values: chacha20-poly1305, aes-256-gcm, aes-128-gcm]
-  -i, --max-idle-timeout-ms <MAX_IDLE_TIMEOUT_MS>
+  -i, --quic-timeout-ms <QUIC_TIMEOUT_MS>
           Applicable only for quic protocol as upstream
           Max idle timeout for the QUIC connections [default: 120000]
+      --tcp-timeout-ms <TCP_TIMEOUT_MS>
+          Read timeout in milliseconds for TCP connections [default: 30000]
+      --udp-timeout-ms <UDP_TIMEOUT_MS>
+          Read timeout in milliseconds for UDP connections [default: 5000]
   -R, --retry-interval-ms <RETRY_INTERVAL_MS>
           Applicable only for quic protocol as upstream
           Max idle timeout for the QUIC connections [default: 5000]

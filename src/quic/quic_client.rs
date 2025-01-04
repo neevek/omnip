@@ -57,7 +57,9 @@ impl QuicClient {
         config.password = quic_client_config.common_cfg.password.clone();
         config.cert_path = quic_client_config.common_cfg.cert.clone();
         config.cipher = quic_client_config.common_cfg.cipher.clone();
-        config.max_idle_timeout_ms = quic_client_config.common_cfg.max_idle_timeout_ms;
+        config.quic_timeout_ms = quic_client_config.common_cfg.quic_timeout_ms;
+        config.tcp_timeout_ms = quic_client_config.common_cfg.tcp_timeout_ms;
+        config.udp_timeout_ms = quic_client_config.common_cfg.udp_timeout_ms;
         config.wait_before_retry_ms = quic_client_config.common_cfg.retry_interval_ms;
         config.workers = quic_client_config.common_cfg.workers;
         config.local_tcp_server_addr = quic_client_config.local_tcp_server_addr;

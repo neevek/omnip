@@ -332,7 +332,9 @@ impl Server {
         use_sync: bool,
     ) -> Result<UdpServer> {
         let upstream_addr = inner_state!(self, udp_upstream).unwrap();
-        let udp_server = UdpServer::bind_and_start(addr, upstream_addr, use_sync).await?;
+        let udp_server =
+            UdpServer::bind_and_start(addr, upstream_addr, use_sync, self.config.udp_timeout_ms)
+                .await?;
 
         let udp_server_addr = udp_server.local_addr().unwrap();
         inner_state!(self, udp_upstream) = Some(udp_server_addr);
@@ -491,14 +493,8 @@ impl Server {
             proxy_rule_manager: inner_state!(self, proxy_rule_manager).clone(),
             stats_sender,
             tcp_nodelay: cfg.tcp_nodelay,
+            tcp_timeout_ms: cfg.tcp_timeout_ms,
         });
-
-        // if let Some(p) = cfg.server_addr.proto {
-        //     if p.is_udp_supported() {
-        //         let addr = cfg.upstream_udp.unwrap_or(cfg.upstream_addr);
-        //         let udp_server = UdpServer::bind_and_start(cfg.addr, upstream_addr, false).await;
-        //     }
-        // }
 
         loop {
             match proxy_listener.accept().await {
@@ -532,6 +528,7 @@ impl Server {
                                     inbound_stream,
                                     outbound_stream,
                                     &psp.stats_sender,
+                                    psp.tcp_timeout_ms,
                                 )
                                 .await
                                 .ok();
@@ -789,6 +786,7 @@ impl Server {
                         inbound_stream,
                         outbound_stream,
                         &params.stats_sender,
+                        params.tcp_timeout_ms,
                     )
                     .await?;
                 }
@@ -863,6 +861,7 @@ impl Server {
         mut inbound_stream: TcpStream,
         mut outbound_stream: TcpStream,
         stats_sender: &Sender<ServerStats>,
+        tcp_timeout_ms: u64,
     ) -> Result<ProxyTraffic, ProxyError> {
         stats_sender.send(ServerStats::NewConnection).await.ok();
 
@@ -897,13 +896,15 @@ impl Server {
                         &mut outbound_writer,
                         &mut inbound_buffer,
                         &mut tx_bytes,
-                        &mut inbound_stream_eos) => result,
+                        &mut inbound_stream_eos,
+                        tcp_timeout_ms) => result,
                     result = Self::transfer_data_with_timeout(
                         &mut outbound_reader,
                         &mut inbound_writer,
                         &mut outbound_buffer,
                         &mut rx_bytes,
-                        &mut outbound_stream_eos) => result,
+                        &mut outbound_stream_eos,
+                        tcp_timeout_ms) => result,
                 }
             } else if !outbound_stream_eos {
                 Self::transfer_data_with_timeout(
@@ -912,6 +913,7 @@ impl Server {
                     &mut outbound_buffer,
                     &mut rx_bytes,
                     &mut outbound_stream_eos,
+                    tcp_timeout_ms,
                 )
                 .await
             } else {
@@ -921,6 +923,7 @@ impl Server {
                     &mut inbound_buffer,
                     &mut tx_bytes,
                     &mut inbound_stream_eos,
+                    tcp_timeout_ms,
                 )
                 .await
             };
@@ -956,12 +959,13 @@ impl Server {
         buffer: &mut [u8],
         out_bytes: &mut u64,
         eos_flag: &mut bool,
+        tcp_timeout_ms: u64,
     ) -> Result<usize, ProxyError>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        match tokio::time::timeout(Duration::from_secs(15), reader.read(buffer))
+        match tokio::time::timeout(Duration::from_millis(tcp_timeout_ms), reader.read(buffer))
             .await
             .map_err(|_: Elapsed| ProxyError::Timeout)?
         {
@@ -1206,7 +1210,7 @@ impl Api for Server {
             cert: cfg.cert.clone(),
             cipher: cfg.cipher.clone(),
             password: cfg.password.clone(),
-            idle_timeout: cfg.max_idle_timeout_ms,
+            idle_timeout: cfg.quic_timeout_ms,
             retry_interval: cfg.retry_interval_ms,
         }
     }
@@ -1252,7 +1256,7 @@ impl Api for Server {
         base_common_quic_config.cert = config.cert;
         base_common_quic_config.cipher = config.cipher;
         base_common_quic_config.password = config.password;
-        base_common_quic_config.max_idle_timeout_ms = config.idle_timeout;
+        base_common_quic_config.quic_timeout_ms = config.idle_timeout;
         base_common_quic_config.retry_interval_ms = config.retry_interval;
         let upstream_addr = NetAddr::from_str(config.upstream_addr.as_str())?;
         let quic_client_join_handle = self
@@ -1273,4 +1277,5 @@ struct ProxySupportParams {
     proxy_rule_manager: Option<ProxyRuleManager>,
     stats_sender: Sender<ServerStats>,
     tcp_nodelay: bool,
+    tcp_timeout_ms: u64,
 }

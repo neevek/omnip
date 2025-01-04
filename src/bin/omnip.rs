@@ -31,6 +31,8 @@ fn main() -> Result<()> {
         args.threads,
         args.watch_proxy_rules_change,
         args.tcp_nodelay,
+        args.tcp_timeout_ms,
+        args.udp_timeout_ms,
     )?;
 
     let common_quic_config = CommonQuicConfig {
@@ -38,7 +40,9 @@ fn main() -> Result<()> {
         key: args.key,
         password: args.password,
         cipher: args.cipher,
-        max_idle_timeout_ms: args.max_idle_timeout_ms,
+        quic_timeout_ms: args.quic_timeout_ms,
+        tcp_timeout_ms: args.tcp_timeout_ms,
+        udp_timeout_ms: args.udp_timeout_ms,
         retry_interval_ms: args.retry_interval_ms,
         workers: args.threads,
     };
@@ -156,7 +160,15 @@ struct OmnipArgs {
     /// Applicable only for quic protocol as upstream
     /// Max idle timeout for the QUIC connections
     #[arg(short = 'i', long, verbatim_doc_comment, default_value = "120000")]
-    max_idle_timeout_ms: u64,
+    quic_timeout_ms: u64,
+
+    /// Read timeout in milliseconds for TCP connections
+    #[arg(long, verbatim_doc_comment, default_value = "30000")]
+    tcp_timeout_ms: u64,
+
+    /// Read timeout in milliseconds for UDP connections
+    #[arg(long, verbatim_doc_comment, default_value = "5000")]
+    udp_timeout_ms: u64,
 
     /// Applicable only for quic protocol as upstream
     /// Max idle timeout for the QUIC connections
