@@ -672,9 +672,10 @@ impl Server {
                     MatchResult::Proxy
                 } else {
                     match params.proxy_rule_manager.clone() {
-                        Some(mut prm) if addr.is_domain() => {
-                            prm.matches(addr.unwrap_domain(), addr.port)
-                        }
+                        Some(mut prm) => match &addr.host {
+                            Host::Domain(domain) => prm.matches(domain, addr.port),
+                            Host::IP(ip) => prm.matches(&ip.to_string(), addr.port),
+                        },
                         _ => MatchResult::Direct,
                     }
                 };

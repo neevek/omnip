@@ -11,6 +11,8 @@ use std::sync::{Arc, RwLock};
 
 use log::{debug, info, warn};
 use regex::Regex;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 type FnMatch = Box<dyn Send + Sync + Fn(&str, u16) -> bool>;
 const SORT_MATCH_RULES_COUNT_THRESHOLD: usize = 10;
@@ -152,6 +154,40 @@ impl ProxyRuleManager {
             return None;
         }
 
+        // IPv6 may start with "::", but we will simply ignore it here
+        if rule.chars().nth(0).unwrap().is_numeric() {
+            // Handle CIDR notation first
+            if let Some((ip_str, prefix_len)) = rule.split_once('/') {
+                if let (Ok(ip), Ok(prefix_len)) =
+                    (IpAddr::from_str(ip_str), prefix_len.parse::<u8>())
+                {
+                    let cidr = IpCidr::new(ip, prefix_len);
+                    return Some(Box::new(move |host, _port| {
+                        if host.is_empty() || !host.chars().nth(0).unwrap().is_numeric() {
+                            return false;
+                        }
+                        if let Ok(host_ip) = IpAddr::from_str(host) {
+                            return cidr.contains(&host_ip);
+                        }
+                        false
+                    }));
+                }
+            }
+
+            // Handle direct IP addresses
+            if let Ok(ip) = IpAddr::from_str(rule) {
+                return Some(Box::new(move |host, _port| {
+                    if host.is_empty() || !host.chars().nth(0).unwrap().is_numeric() {
+                        return false;
+                    }
+                    if let Ok(host_ip) = IpAddr::from_str(host) {
+                        return host_ip == ip;
+                    }
+                    false
+                }));
+            }
+        }
+
         let rule_len = rule.len();
         let bytes = rule.as_bytes();
 
@@ -285,5 +321,30 @@ impl ProxyRuleManager {
 impl Default for ProxyRuleManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+struct IpCidr {
+    ip: IpAddr,
+    prefix_len: u8,
+}
+
+impl IpCidr {
+    fn new(ip: IpAddr, prefix_len: u8) -> Self {
+        Self { ip, prefix_len }
+    }
+
+    fn contains(&self, ip: &IpAddr) -> bool {
+        match (self.ip, ip) {
+            (IpAddr::V4(network), IpAddr::V4(ip)) => {
+                let mask = !((1u32 << (32 - self.prefix_len)) - 1);
+                (u32::from(network) & mask) == (u32::from(*ip) & mask)
+            }
+            (IpAddr::V6(network), IpAddr::V6(ip)) => {
+                let mask = !((1u128 << (128 - self.prefix_len)) - 1);
+                (u128::from(network) & mask) == (u128::from(*ip) & mask)
+            }
+            _ => false,
+        }
     }
 }
