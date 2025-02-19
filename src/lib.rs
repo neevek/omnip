@@ -362,32 +362,6 @@ pub struct CommonQuicConfig {
     pub workers: usize,
 }
 
-// impl Config {
-//     pub fn server_addr_as_string(&self) -> String {
-//         match self.server_type {
-//             Some(ref pt) => format!(
-//                 "{}://{}",
-//                 pt.format_as_string(self.is_quic_proto),
-//                 self.addr
-//             ),
-//             None => self.addr.to_string(),
-//         }
-//     }
-//
-//     pub fn upstream_as_string(&self) -> String {
-//         match self.upstream_addr {
-//             Some(ref upstream_addr) => {
-//                 let proto = match self.upstream_type {
-//                     Some(ref pt) => pt.format_as_string(self.is_upstream_quic_proto),
-//                     None => "".to_string(),
-//                 };
-//                 format!("{}://{}", proto, upstream_addr.to_string())
-//             }
-//             None => "".to_string(),
-//         }
-//     }
-// }
-
 pub fn local_socket_addr(ipv6: bool) -> SocketAddr {
     if ipv6 {
         SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)
@@ -498,8 +472,8 @@ pub fn create_config(
     workers: usize,
     watch_proxy_rules_change: bool,
     tcp_nodelay: bool,
-    tcp_timeout_ms: u64,
-    udp_timeout_ms: u64,
+    mut tcp_timeout_ms: u64,
+    mut udp_timeout_ms: u64,
 ) -> Result<Config> {
     let server_addr = match parse_server_addr(&server_addr)? {
         Some(server_addr) => server_addr,
@@ -509,6 +483,13 @@ pub fn create_config(
     };
 
     let upstream_addr = parse_server_addr(&upstream_addr)?;
+
+    if tcp_timeout_ms == 0 {
+        tcp_timeout_ms = 30000;
+    }
+    if udp_timeout_ms == 0 {
+        udp_timeout_ms = 5000;
+    }
 
     #[allow(warnings)]
     if let Some(upstream_addr) = &upstream_addr {
@@ -623,6 +604,8 @@ pub mod android {
         jretryIntervalMs: jint,
         jworkers: jint,
         jtcpNoDelay: jboolean,
+        jtcpTimeoutMs: jlong,
+        judpTimeoutMs: jlong,
     ) -> jlong {
         if jaddr.is_null() {
             return 0;
@@ -647,6 +630,8 @@ pub mod android {
             jworkers as usize,
             false,
             jtcpNoDelay != 0,
+            jtcpTimeoutMs as u64,
+            judpTimeoutMs as u64,
         ) {
             Ok(config) => config,
             Err(e) => {
@@ -663,6 +648,8 @@ pub mod android {
             quic_timeout_ms: jquicTimeoutMs as u64,
             retry_interval_ms: jretryIntervalMs as u64,
             workers: jworkers as usize,
+            tcp_timeout_ms: jtcpTimeoutMs as u64,
+            udp_timeout_ms: judpTimeoutMs as u64,
         };
 
         Box::into_raw(Box::new(Server::new(config, common_quic_config))) as jlong

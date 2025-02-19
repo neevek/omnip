@@ -1,6 +1,6 @@
 [package]
 name = "omnip"
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 
 [lib]
@@ -28,7 +28,7 @@ lazy_static = "1.4"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
 # rstun = { path = "../rstun" }
-rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.6.5" }
+rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.6.6" }
 hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"
