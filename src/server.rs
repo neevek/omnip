@@ -637,6 +637,11 @@ impl Server {
                     .map_err(|_: Elapsed| ProxyError::Timeout)?
                     .map_err(|_| ProxyError::BadRequest)?;
 
+            if nread == 0 {
+                error!("invalid request");
+                return Err(ProxyError::BadRequest);
+            }
+
             if proxy_handler.is_none() {
                 proxy_handler = Some(Self::create_proxy_handler(
                     &params.proto,

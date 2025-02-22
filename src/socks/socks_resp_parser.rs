@@ -10,7 +10,6 @@ pub(crate) enum State {
     SelectMethod,
     IdentifyingMethod,
     Connect,
-    Connecting,
     NegotiationCompleted,
     ErrorOccurred(SocksError),
 }
@@ -67,7 +66,6 @@ impl SocksRespParser {
         }
 
         if self.state == State::Connect {
-            self.state = State::Connecting;
             let bytes = self.buffer.as_bytes();
             let resp_size = bytes.len();
 

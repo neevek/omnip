@@ -14,6 +14,8 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
+const SOCKS_MAX_RETRY_COUNT: u8 = 20;
+
 #[derive(PartialEq, Debug)]
 pub(crate) enum InternalParseState {
     SelectMethod,
@@ -26,6 +28,7 @@ pub struct SocksProxyHandler {
     bnd_addr: SocketAddr,
     state: InternalParseState,
     target_addr: Option<NetAddr>,
+    retry_count: u8,
 }
 
 impl SocksProxyHandler {
@@ -39,6 +42,7 @@ impl SocksProxyHandler {
                 SocksVersion::V4 => InternalParseState::SelectedMethod,
             },
             target_addr: None,
+            retry_count: 0,
         }
     }
 
@@ -220,7 +224,17 @@ impl ProxyHandler for SocksProxyHandler {
             return ParseState::ReceivedRequest(self.target_addr.as_ref().unwrap());
         }
 
-        ParseState::Pending
+        self.retry_count += 1;
+
+        if self.retry_count >= SOCKS_MAX_RETRY_COUNT {
+            error!(
+                "unexpected socks request failed with retry count: {}",
+                self.retry_count
+            );
+            self.fail_with_resp()
+        } else {
+            ParseState::Pending
+        }
     }
 
     async fn handle(
