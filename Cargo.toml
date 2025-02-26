@@ -38,15 +38,15 @@ base64 = "0.22"
 dashmap = "6"
 
 [dev-dependencies]
-jni = "0.19"
+jni = "0.21"
 android_logger = "0.13"
 
 [target.aarch64-linux-android.dependencies]
-jni = "0.19"
+jni = "0.21"
 android_logger = "0.13"
 
 [target.armv7-linux-androideabi.dependencies]
-jni = "0.19"
+jni = "0.21"
 android_logger = "0.13"
 
 [build-dependencies]

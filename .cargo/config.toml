@@ -1,10 +1,8 @@
-# works with NDK 21 or lower
+# works with NDK 28.0.13004108
 [target.aarch64-linux-android]
-ar =     "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
-linker = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang"
-rustflags = ["-L", "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/lib/gcc/aarch64-linux-android/4.9.x"]
+ar = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android-ar"
+linker = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android35-clang"
 
 [target.armv7-linux-androideabi]
-ar =     "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/arm-linux-androideabi-ar"
-linker = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi30-clang"
-rustflags = ["-L", "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/lib/gcc/arm-linux-androideabi/4.9.x"]
+ar = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+linker = "/Users/neevek/Library/Android/ndk-bundle/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi35-clang"

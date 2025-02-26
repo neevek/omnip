@@ -567,11 +567,11 @@ pub mod android {
 
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeInitLogger(
-        env: JNIEnv,
+        mut env: JNIEnv,
         _: JClass,
         jlogLevel: JString,
     ) -> jboolean {
-        let log_level = match get_string(&env, &jlogLevel).as_str() {
+        let log_level = match get_string(&mut env, &jlogLevel).as_str() {
             "T" => "trace",
             "D" => "debug",
             "I" => "info",
@@ -589,7 +589,7 @@ pub mod android {
 
     #[no_mangle]
     pub unsafe extern "C" fn Java_net_neevek_omnip_Omnip_nativeCreate(
-        env: JNIEnv,
+        mut env: JNIEnv,
         _: JClass,
         jaddr: JString,
         jupstream: JString,
@@ -611,15 +611,15 @@ pub mod android {
             return 0;
         }
 
-        let addr = get_string(&env, &jaddr);
-        let upstream = get_string(&env, &jupstream);
-        let dot_server = get_string(&env, &jdotServer);
-        let name_servers = get_string(&env, &jnameServers);
-        let proxy_rules_file = get_string(&env, &jproxyRulesFile);
-        let cert = get_string(&env, &jcert);
-        let key = get_string(&env, &jkey);
-        let cipher = get_string(&env, &jcipher);
-        let password = get_string(&env, &jpassword);
+        let addr = get_string(&mut env, &jaddr);
+        let upstream = get_string(&mut env, &jupstream);
+        let dot_server = get_string(&mut env, &jdotServer);
+        let name_servers = get_string(&mut env, &jnameServers);
+        let proxy_rules_file = get_string(&mut env, &jproxyRulesFile);
+        let cert = get_string(&mut env, &jcert);
+        let key = get_string(&mut env, &jkey);
+        let cipher = get_string(&mut env, &jcipher);
+        let password = get_string(&mut env, &jpassword);
 
         let config = match create_config(
             addr,
@@ -684,13 +684,13 @@ pub mod android {
         server_ptr: jlong,
     ) -> jstring {
         if server_ptr == 0 {
-            return env.new_string("").unwrap().into_inner();
+            return env.new_string("").unwrap().into_raw();
         }
 
         let server = &mut *(server_ptr as *mut Arc<Server>);
         env.new_string(server.get_state().to_string())
             .unwrap()
-            .into_inner()
+            .into_raw()
     }
 
     #[no_mangle]
@@ -721,13 +721,13 @@ pub mod android {
             let jvm = env.get_java_vm().unwrap();
             let jobj_global_ref = env.new_global_ref(jobj).unwrap();
             server.set_on_info_listener(move |data: &str| {
-                let env = jvm.attach_current_thread().unwrap();
+                let mut env = jvm.attach_current_thread().unwrap();
                 if let Ok(s) = env.new_string(data) {
                     env.call_method(
                         &jobj_global_ref,
                         "onInfo",
                         "(Ljava/lang/String;)V",
-                        &[s.into()],
+                        &[(&s).into()],
                     )
                     .unwrap();
                 }
@@ -737,9 +737,9 @@ pub mod android {
         server.set_enable_on_info_report(bool_enable);
     }
 
-    fn get_string(env: &JNIEnv, jstring: &JString) -> String {
-        if !jstring.is_null() {
-            env.get_string(*jstring).unwrap().into()
+    fn get_string(env: &mut JNIEnv, jstr: &JString) -> String {
+        if !jstr.is_null() {
+            env.get_string(&jstr).unwrap().to_string_lossy().to_string()
         } else {
             String::from("")
         }
