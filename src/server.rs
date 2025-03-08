@@ -220,29 +220,6 @@ impl Server {
         let orig_server_addr = cfg.server_addr.net_addr.to_socket_addr().unwrap();
         let require_quic_server = cfg.server_addr.is_quic_proto;
 
-        // if is_udp_proto && !require_quic_server {
-        //     self.bind_udp_server(orig_server_addr, true).await?;
-        //     return Ok(());
-        // }
-
-        // if is_tcp_or_udp_proto {
-        //     // we need to start the tcp or udp server
-        //     if let Some(ProtoType::Udp) = cfg.server_addr.proto {
-        //         if !require_quic_server {
-        //             let udp_server = self.bind_udp_server(proxy_server_addr, true).await?;
-        //         }
-        //     } else {
-        //     }
-        // }
-
-        // // let (require_tcp, require_udp) = self.is_tcp_or_udp_server_required();
-        // let udp_server_addr = if let Some(ProtoType::Udp) = cfg.server_addr.proto {
-        //     let udp_server = self.bind_udp_server(proxy_server_addr, true).await?;
-        //     udp_server.local_addr().ok()
-        // } else {
-        //     inner_state!(self, udp_upstream)
-        // };
-
         let (proxy_tcp_server_handle, quic_server_tcp_upstream, quic_server_udp_upstream) =
             if !is_udp_proto {
                 let tcp_server_addr = if require_quic_server {
@@ -717,10 +694,12 @@ impl Server {
             }
 
             if outbound_type == OutboundType::Direct {
-                debug!(
-                    "serve request directly: {addr} from {}",
-                    inbound_stream.peer_addr().unwrap()
-                );
+                let peer_addr = inbound_stream.peer_addr().map_err(|e| {
+                    debug!("unexpected error: {e}");
+                    ProxyError::InternalError
+                })?;
+
+                debug!("serve request directly: {addr} from {peer_addr}",);
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
                         let resolver = if addr.is_internal_domain() {
@@ -736,16 +715,21 @@ impl Server {
                         let mut outbound_stream = None;
                         for ip in ip_arr {
                             let resolved_ip = NetAddr::from_ip(ip, addr.port);
-                            if resolved_ip.is_loopback()
-                                && addr.port == inbound_stream.local_addr().unwrap().port()
-                            {
-                                outbound_stream = Self::connect_to_dashboard(
-                                    params.dashboard_addr,
-                                    &inbound_stream,
-                                    params.tcp_nodelay,
-                                )
-                                .await?;
-                                break;
+                            if resolved_ip.is_loopback() {
+                                let local_addr = inbound_stream.local_addr().map_err(|e| {
+                                    debug!("unexpected error: {e}");
+                                    ProxyError::InternalError
+                                })?;
+
+                                if addr.port == local_addr.port() {
+                                    outbound_stream = Self::connect_to_dashboard(
+                                        params.dashboard_addr,
+                                        &inbound_stream,
+                                        params.tcp_nodelay,
+                                    )
+                                    .await?;
+                                    break;
+                                }
                             }
 
                             let stream = Self::create_tcp_stream(
@@ -763,8 +747,12 @@ impl Server {
                     }
 
                     Host::IP(ip) => {
-                        let inbound_addr = inbound_stream.local_addr().unwrap();
-                        if ip == &inbound_addr.ip() && addr.port == inbound_addr.port() {
+                        let local_addr = inbound_stream.local_addr().map_err(|e| {
+                            debug!("unexpected error: {e}");
+                            ProxyError::InternalError
+                        })?;
+
+                        if ip == &local_addr.ip() && addr.port == local_addr.port() {
                             Self::connect_to_dashboard(
                                 params.dashboard_addr,
                                 &inbound_stream,
