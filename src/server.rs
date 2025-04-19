@@ -498,7 +498,7 @@ impl Server {
                                 return;
                             }
 
-                            if let Some(outbound_stream) =
+                            if let Ok(outbound_stream) =
                                 Self::create_tcp_stream(upstream.unwrap(), psp.tcp_nodelay).await
                             {
                                 Self::start_stream_transfer(
@@ -686,7 +686,9 @@ impl Server {
                         );
 
                         outbound_stream =
-                            Self::create_tcp_stream(upstream.unwrap(), params.tcp_nodelay).await;
+                            Self::create_tcp_stream(upstream.unwrap(), params.tcp_nodelay)
+                                .await
+                                .ok();
                     }
 
                     _ => {}
@@ -727,18 +729,19 @@ impl Server {
                                         &inbound_stream,
                                         params.tcp_nodelay,
                                     )
-                                    .await?;
+                                    .await
+                                    .ok();
                                     break;
                                 }
                             }
 
-                            let stream = Self::create_tcp_stream(
+                            if let Ok(stream) = Self::create_tcp_stream(
                                 SocketAddr::new(ip, addr.port),
                                 params.tcp_nodelay,
                             )
-                            .await;
-                            if stream.is_some() {
-                                outbound_stream = stream;
+                            .await
+                            {
+                                outbound_stream = Some(stream);
                                 break;
                             }
                         }
@@ -758,13 +761,15 @@ impl Server {
                                 &inbound_stream,
                                 params.tcp_nodelay,
                             )
-                            .await?
+                            .await
+                            .ok()
                         } else {
                             Self::create_tcp_stream(
                                 addr.to_socket_addr().unwrap(),
                                 params.tcp_nodelay,
                             )
                             .await
+                            .ok()
                         }
                     }
                 };
@@ -805,11 +810,11 @@ impl Server {
         dashboard_addr: Option<SocketAddr>,
         inbound_stream: &TcpStream,
         tcp_nodelay: bool,
-    ) -> Result<Option<TcpStream>, ProxyError> {
+    ) -> Result<TcpStream, ProxyError> {
         match dashboard_addr {
             Some(addr) => {
                 debug!("dashboard request: {:?}", inbound_stream.peer_addr());
-                Ok(Self::create_tcp_stream(addr, tcp_nodelay).await)
+                Self::create_tcp_stream(addr, tcp_nodelay).await
             }
             None => {
                 log::warn!(
@@ -821,27 +826,32 @@ impl Server {
         }
     }
 
-    async fn create_tcp_stream(addr: SocketAddr, nodelay: bool) -> Option<TcpStream> {
+    async fn create_tcp_stream(addr: SocketAddr, nodelay: bool) -> Result<TcpStream, ProxyError> {
         if addr.ip().is_unspecified() {
             error!("address is unspecified: {addr}");
-            return None;
+            return Err(ProxyError::BadGateway(anyhow!(
+                "address is unspecified: {addr}"
+            )));
         }
 
-        let stream = TcpStream::connect(addr)
+        let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
             .await
+            .map_err(|_: Elapsed| {
+                error!("timeout connecting to address: {addr}");
+                ProxyError::Timeout
+            })?
             .map_err(|e| {
                 error!("failed to connect to address: {addr}, err: {e}");
-                e
-            })
-            .ok()?;
+                ProxyError::BadGateway(anyhow!(e))
+            })?;
 
         if nodelay {
             stream
                 .set_nodelay(true)
                 .map_err(|e| error!("failed to call set_nodelay: {e}"))
-                .ok();
+                .ok(); // Keep .ok() here as set_nodelay error is not critical
         }
-        Some(stream)
+        Ok(stream)
     }
 
     fn proto_as_string(&self) -> String {
