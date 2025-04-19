@@ -8,7 +8,7 @@ on:
 jobs:
   linux-gnu-x86_64:
     name: Linux gnu x86_64
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
@@ -28,7 +28,7 @@ jobs:
 
   linux-musl-x86_64:
     name: Linux musl x86_64
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
