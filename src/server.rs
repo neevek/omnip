@@ -182,31 +182,30 @@ impl Server {
             .clone()
             .map_or(false, |p| p == ProtoType::Tcp || p == ProtoType::Udp);
 
-        let mut quic_client_join_handle = None;
+        let mut require_quic_client = false;
         if let Some(upstream_addr) = &cfg.upstream_addr {
             // connect to QUIC server if it is +quic protocols
-            let require_quic_client = upstream_addr.is_quic_proto;
+            require_quic_client = upstream_addr.is_quic_proto;
             if require_quic_client {
                 // connecting to quic server, and it will set relevant upstream address
-                let join_handle = self
-                    .start_quic_client(
-                        upstream_addr.net_addr.clone(),
-                        self.common_quic_config.clone(),
-                    )
-                    .await?;
+                self.start_quic_client(
+                    upstream_addr.net_addr.clone(),
+                    self.common_quic_config.clone(),
+                )
+                .await?;
 
                 if is_tcp_or_udp_proto {
                     info!(
                         "start serving {} through quic client",
                         server_proto.unwrap().format_as_string(false)
                     );
-                    join_handle.await.ok();
+
+                    // wait indefinitely here...
+                    std::future::pending::<()>().await;
+
                     // directly use the quic client's tcp server or udp server, and return early
                     return Ok(());
                 }
-
-                // self.tcp_upstream or self.udp_upstream is set accordingly when reaching here
-                quic_client_join_handle = Some(join_handle);
             } else if upstream_addr.proto == Some(ProtoType::Udp) {
                 // non-quic upstream can only use IP address instead of domain
                 inner_state!(self, udp_upstream) = upstream_addr.net_addr.to_socket_addr();
@@ -253,10 +252,9 @@ impl Server {
             };
 
         // join on the QUIC tunnel after the proxy server is started
-        if let Some(quic_client_join_handle) = quic_client_join_handle {
-            info!("join on the quic tunnel...",);
-            quic_client_join_handle.await.ok();
-            info!("quic tunnel quit");
+        if require_quic_client {
+            // wait indefinitely here...
+            std::future::pending::<()>().await;
         } else if require_quic_server {
             let quic_server_config = QuicServerConfig {
                 server_addr: orig_server_addr,
@@ -335,7 +333,7 @@ impl Server {
         &self,
         quic_server_addr: NetAddr,
         common_quic_config: CommonQuicConfig,
-    ) -> Result<JoinHandle<()>> {
+    ) -> Result<()> {
         // if we have to forward tcp/udp through quic tunnel, we can directly use the
         // quic client's tcp/udp entry without creating another layer of traffic relay
         let cfg = &self.config;
@@ -374,36 +372,23 @@ impl Server {
             });
         }
 
-        let (require_tcp, require_udp) = self.is_tcp_or_udp_server_required();
-
-        if require_tcp {
-            let tcp_server_addr = client.start_tcp_server().await?;
+        if let Some(addr) = tcp_server_addr {
+            let tcp_server_addr = client.start_tcp_server(addr).await?;
             inner_state!(self, tcp_upstream) = Some(tcp_server_addr);
             info!("started quic tcp server: {tcp_server_addr}");
         }
 
-        if require_udp {
-            let udp_server_addr = client.start_udp_server().await?;
+        if let Some(addr) = udp_server_addr {
+            let udp_server_addr = client.start_udp_server(addr).await?;
             inner_state!(self, udp_upstream) = Some(udp_server_addr);
             info!("started quic udp server: {udp_server_addr}");
         }
 
-        // will handover the handle to the caller, so we don't block here
-        let join_handle = client.connect_and_serve_async();
+        client.connect_and_serve_async();
 
         inner_state!(self, quic_client) = Some(Arc::new(client));
 
-        Ok(join_handle)
-    }
-
-    fn is_tcp_or_udp_server_required(&self) -> (bool, bool) {
-        self.config
-            .server_addr
-            .proto
-            .as_ref()
-            .map_or((true, false), |p| {
-                (*p != ProtoType::Udp, *p == ProtoType::Udp)
-            })
+        Ok(())
     }
 
     async fn init_resolver(self: &mut Arc<Self>) {
@@ -671,12 +656,16 @@ impl Server {
                     }
 
                     MatchResult::Proxy if upstream.is_some() => {
-                        outbound_type = match params.upstream_type.as_ref().unwrap() {
-                            ProtoType::Http => OutboundType::HttpProxy,
-                            ProtoType::Socks4 => OutboundType::SocksProxy(SocksVersion::V4),
-                            ProtoType::Socks5 => OutboundType::SocksProxy(SocksVersion::V5),
-                            ProtoType::Tcp | ProtoType::Udp => {
+                        outbound_type = match params.upstream_type.as_ref() {
+                            Some(ProtoType::Http) => OutboundType::HttpProxy,
+                            Some(ProtoType::Socks4) => OutboundType::SocksProxy(SocksVersion::V4),
+                            Some(ProtoType::Socks5) => OutboundType::SocksProxy(SocksVersion::V5),
+                            Some(ProtoType::Tcp | ProtoType::Udp) => {
                                 unreachable!("not valid proxy type")
+                            }
+                            None => {
+                                error!("protocol is required for upstream");
+                                return Err(ProxyError::InternalError);
                             }
                         };
 
@@ -1263,13 +1252,8 @@ impl Api for Server {
         base_common_quic_config.quic_timeout_ms = config.idle_timeout;
         base_common_quic_config.retry_interval_ms = config.retry_interval;
         let upstream_addr = NetAddr::from_str(config.upstream_addr.as_str())?;
-        let quic_client_join_handle = self
-            .start_quic_client(upstream_addr, base_common_quic_config)
-            .await;
-
-        tokio::spawn(async move { quic_client_join_handle.unwrap().await });
-
-        Ok(())
+        self.start_quic_client(upstream_addr, base_common_quic_config)
+            .await
     }
 }
 

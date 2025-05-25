@@ -1,7 +1,7 @@
 use crate::QuicClientConfig;
 use anyhow::Result;
+use rstun::{TunnelConfig, TunnelMode, Upstream, UpstreamType};
 use std::net::SocketAddr;
-use tokio::task::JoinHandle;
 
 pub struct QuicClient {
     client: rstun::Client,
@@ -19,15 +19,15 @@ impl QuicClient {
         }
     }
 
-    pub async fn start_tcp_server(&mut self) -> Result<SocketAddr> {
-        Ok(self.client.start_tcp_server().await?.unwrap())
+    pub async fn start_tcp_server(&mut self, addr: SocketAddr) -> Result<SocketAddr> {
+        Ok(self.client.start_tcp_server(addr).await?.addr())
     }
 
-    pub async fn start_udp_server(&mut self) -> Result<SocketAddr> {
-        Ok(self.client.start_udp_server().await?.unwrap())
+    pub async fn start_udp_server(&mut self, addr: SocketAddr) -> Result<SocketAddr> {
+        Ok(self.client.start_udp_server(addr).await?.addr())
     }
 
-    pub fn connect_and_serve_async(&self) -> JoinHandle<()> {
+    pub fn connect_and_serve_async(&mut self) {
         self.client.connect_and_serve_async()
     }
 
@@ -52,8 +52,31 @@ impl QuicClient {
     }
 
     fn set_config(config: &mut rstun::ClientConfig, quic_client_config: &QuicClientConfig) {
+        let mut tunnels = Vec::new();
+        if quic_client_config.local_tcp_server_addr.is_some() {
+            tunnels.push(TunnelConfig {
+                mode: TunnelMode::Out,
+                local_server_addr: quic_client_config.local_tcp_server_addr,
+                upstream: Upstream {
+                    upstream_addr: None,
+                    upstream_type: UpstreamType::Tcp,
+                },
+            });
+        }
+
+        if quic_client_config.local_udp_server_addr.is_some() {
+            tunnels.push(TunnelConfig {
+                mode: TunnelMode::Out,
+                local_server_addr: quic_client_config.local_udp_server_addr,
+                upstream: Upstream {
+                    upstream_addr: None,
+                    upstream_type: UpstreamType::Udp,
+                },
+            });
+        }
+
+        config.tunnels = tunnels;
         config.server_addr = quic_client_config.server_addr.to_string();
-        config.mode = rstun::TUNNEL_MODE_OUT;
         config.password = quic_client_config.common_cfg.password.clone();
         config.cert_path = quic_client_config.common_cfg.cert.clone();
         config.cipher = quic_client_config.common_cfg.cipher.clone();
@@ -62,18 +85,6 @@ impl QuicClient {
         config.udp_timeout_ms = quic_client_config.common_cfg.udp_timeout_ms;
         config.wait_before_retry_ms = quic_client_config.common_cfg.retry_interval_ms;
         config.workers = quic_client_config.common_cfg.workers;
-        config.local_tcp_server_addr = quic_client_config.local_tcp_server_addr;
-        config.local_udp_server_addr = quic_client_config.local_udp_server_addr;
-        config.tcp_upstream = if quic_client_config.local_tcp_server_addr.is_some() {
-            Some(rstun::Upstream::PeerDefault)
-        } else {
-            None
-        };
-        config.udp_upstream = if quic_client_config.local_udp_server_addr.is_some() {
-            Some(rstun::Upstream::PeerDefault)
-        } else {
-            None
-        };
         config.dot_servers = quic_client_config.dot_servers.clone();
         config.dns_servers = quic_client_config.name_servers.clone();
     }

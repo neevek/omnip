@@ -390,6 +390,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "ctrlc"
+version = "3.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46f93780a459b7d656ef7f071fe699c4d3d2cb201c4b24d085b6ddc505276e73"
+dependencies = [
+ "nix",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1236,6 +1246,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.9.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1328,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.6.12"
+version = "0.7.0"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1681,8 +1703,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.6.8"
-source = "git+https://github.com/neevek/rstun?tag=release/0.6.8#78f7a19e709a09fe5fc2534ea4dff16dd120cdad"
+version = "0.7.0"
+source = "git+https://github.com/neevek/rstun?tag=release/0.7.0#25a17aa05ad7718996cd916ea480e98f39a6e2b2"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -1692,6 +1714,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "ctrlc",
  "dashmap",
  "enum-as-inner",
  "futures-util",
