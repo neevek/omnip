@@ -16,6 +16,7 @@ pub(crate) enum ServerStats {
 }
 
 #[derive(Serialize)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ServerInfoType {
     ProxyDNSResolverType,
     ProxyServerState,
@@ -42,6 +43,7 @@ where
 }
 
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub(crate) struct ServerInfoBridge {
     listener: Option<Arc<Mutex<dyn FnMut(&str) + 'static + Send + Sync>>>,
 }

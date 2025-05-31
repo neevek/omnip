@@ -285,11 +285,7 @@ impl<'a> HttpRequest<'a> {
         }
 
         if let Some(addr) = addr {
-            let ipv6_end_bracket_pos = if let Some(ipv6_end_bracket_pos) = addr.rfind(']') {
-                ipv6_end_bracket_pos
-            } else {
-                0
-            };
+            let ipv6_end_bracket_pos = addr.rfind(']').unwrap_or(0);
             let mut port = None;
             let mut host_start_pos = 0;
             let mut host_end_pos;

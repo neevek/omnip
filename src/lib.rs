@@ -463,6 +463,7 @@ fn format_addr(addr: &str, default_ip: &str) -> Result<String> {
 }
 
 #[rustfmt::skip]
+#[allow(clippy::too_many_arguments)]
 pub fn create_config(
     server_addr: String,
     upstream_addr: String,

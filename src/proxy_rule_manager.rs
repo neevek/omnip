@@ -197,7 +197,7 @@ impl ProxyRuleManager {
         }
 
         let ch = bytes[0].to_ascii_lowercase() as char;
-        if ch != '|' && ch != '.' && !('0'..='9').contains(&ch) && !('a'..='z').contains(&ch) {
+        if ch != '|' && ch != '.' && !ch.is_ascii_digit() && !ch.is_ascii_lowercase() {
             return None;
         }
 
@@ -292,16 +292,15 @@ impl ProxyRuleManager {
             .find(|(_, rule)| rule.matches(host, port))
             .map_or(false, |(index, rule)| {
                 // sort the rules if it runs with tokio runtime (of course it does)
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    if index >= SORT_MATCH_RULES_INDEX_THRESHOLD
-                        && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
-                    {
-                        let prm = self.clone();
-                        tokio::spawn(async move {
-                            prm.sort_rules();
-                        });
-                        info!("sort the rule for: {host}:{port}, current index:{index}");
-                    }
+                if tokio::runtime::Handle::try_current().is_ok()
+                    && index >= SORT_MATCH_RULES_INDEX_THRESHOLD
+                    && *rule.match_count.read().unwrap() >= SORT_MATCH_RULES_COUNT_THRESHOLD
+                {
+                    let prm = self.clone();
+                    tokio::spawn(async move {
+                        prm.sort_rules();
+                    });
+                    info!("sort the rule for: {host}:{port}, current index:{index}");
                 }
                 true
             })

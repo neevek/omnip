@@ -60,9 +60,8 @@ impl DashboardServer {
     }
 
     pub async fn bind(&self, addr: SocketAddr) -> Result<TcpListener> {
-        let listener = TcpListener::bind(addr).await.map_err(|e| {
+        let listener = TcpListener::bind(addr).await.inspect_err(|_| {
             error!("failed to bind dashboard server on address: {addr}");
-            e
         })?;
 
         let addr = listener.local_addr().unwrap();

@@ -279,9 +279,8 @@ impl Server {
     async fn bind_tcp_server(self: &Arc<Self>, addr: SocketAddr) -> Result<TcpListener> {
         self.setup_proxy_rules_manager()?;
 
-        let listener = TcpListener::bind(addr).await.map_err(|e| {
+        let listener = TcpListener::bind(addr).await.inspect_err(|_| {
             error!("failed to bind proxy server on address: {addr}");
-            e
         })?;
 
         let tcp_server_addr = listener.local_addr().unwrap();
