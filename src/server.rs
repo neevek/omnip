@@ -180,7 +180,7 @@ impl Server {
         let server_proto = cfg.server_addr.proto.clone();
         let is_tcp_or_udp_proto = server_proto
             .clone()
-            .map_or(false, |p| p == ProtoType::Tcp || p == ProtoType::Udp);
+            .is_some_and(|p| p == ProtoType::Tcp || p == ProtoType::Udp);
 
         let mut require_quic_client = false;
         if let Some(upstream_addr) = &cfg.upstream_addr {

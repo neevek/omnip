@@ -290,7 +290,7 @@ impl ProxyRuleManager {
             .iter()
             .enumerate()
             .find(|(_, rule)| rule.matches(host, port))
-            .map_or(false, |(index, rule)| {
+            .is_some_and(|(index, rule)| {
                 // sort the rules if it runs with tokio runtime (of course it does)
                 if tokio::runtime::Handle::try_current().is_ok()
                     && index >= SORT_MATCH_RULES_INDEX_THRESHOLD

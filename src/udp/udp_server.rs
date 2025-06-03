@@ -106,7 +106,7 @@ impl UdpServer {
                     e => {
                         match e {
                             Ok(Err(e)) => {
-                                warn!("failed read from udp socket, err: {}", e.to_string());
+                                warn!("failed read from udp socket, err: {e}");
                             }
                             Err(_) => {
                                 // timedout

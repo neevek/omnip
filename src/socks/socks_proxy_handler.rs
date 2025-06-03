@@ -131,14 +131,14 @@ impl ProxyHandler for SocksProxyHandler {
                 if &data[4..8] == "\x00\x00\x00\x01".as_bytes() {
                     self.target_addr = Some(match Self::parse_socks4a_domain(data) {
                         Some(domain) => {
-                            NetAddr::from_domain(domain, (data[2] as u16) << 8 | data[3] as u16)
+                            NetAddr::from_domain(domain, ((data[2] as u16) << 8) | data[3] as u16)
                         }
                         None => return self.fail_with_resp(),
                     });
                 } else {
                     self.target_addr = Some(NetAddr::from_ip(
                         IpAddr::V4(Ipv4Addr::new(data[4], data[5], data[6], data[7])),
-                        (data[2] as u16) << 8 | data[3] as u16,
+                        ((data[2] as u16) << 8) | data[3] as u16,
                     ));
                 }
 
@@ -163,7 +163,7 @@ impl ProxyHandler for SocksProxyHandler {
                     if data_len == 4 + 4 + 2 {
                         Some(NetAddr::from_ip(
                             IpAddr::V4(Ipv4Addr::new(data[4], data[5], data[6], data[7])),
-                            (data[8] as u16) << 8 | data[9] as u16,
+                            ((data[8] as u16) << 8) | data[9] as u16,
                         ))
                     } else {
                         None
@@ -181,7 +181,7 @@ impl ProxyHandler for SocksProxyHandler {
                             let port_index = domain_start + domain_len;
                             Some(NetAddr::new(
                                 domain,
-                                (data[port_index] as u16) << 8 | data[port_index + 1] as u16,
+                                ((data[port_index] as u16) << 8) | data[port_index + 1] as u16,
                             ))
                         } else {
                             None
@@ -196,16 +196,16 @@ impl ProxyHandler for SocksProxyHandler {
                     if data_len == 4 + 16 + 2 {
                         Some(NetAddr::from_ip(
                             IpAddr::V6(Ipv6Addr::new(
-                                (data[4] as u16) << 8 | data[5] as u16,
-                                (data[6] as u16) << 8 | data[7] as u16,
-                                (data[8] as u16) << 8 | data[9] as u16,
-                                (data[10] as u16) << 8 | data[11] as u16,
-                                (data[12] as u16) << 8 | data[13] as u16,
-                                (data[14] as u16) << 8 | data[15] as u16,
-                                (data[16] as u16) << 8 | data[17] as u16,
-                                (data[18] as u16) << 8 | data[19] as u16,
+                                ((data[4] as u16) << 8) | data[5] as u16,
+                                ((data[6] as u16) << 8) | data[7] as u16,
+                                ((data[8] as u16) << 8) | data[9] as u16,
+                                ((data[10] as u16) << 8) | data[11] as u16,
+                                ((data[12] as u16) << 8) | data[13] as u16,
+                                ((data[14] as u16) << 8) | data[15] as u16,
+                                ((data[16] as u16) << 8) | data[17] as u16,
+                                ((data[18] as u16) << 8) | data[19] as u16,
                             )),
-                            (data[20] as u16) << 8 | data[21] as u16,
+                            ((data[20] as u16) << 8) | data[21] as u16,
                         ))
                     } else {
                         None

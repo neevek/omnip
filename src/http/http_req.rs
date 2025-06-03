@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 pub struct HttpReq {}
 
 impl HttpReq {
-    pub async fn handshake<'a>(
+    pub async fn handshake(
         outbound_stream: &mut TcpStream,
         dst_addr: &NetAddr,
     ) -> Result<Vec<u8>, ProxyError> {
