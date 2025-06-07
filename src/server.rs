@@ -977,8 +977,21 @@ impl Server {
                 // this method is used as a select! branch, use while loop to write the data
                 // instead of using write_all (which is not cancellation safe) to ensure
                 // the code cancellation safe
+                let mut wait_count = 0;
+                let mut writen_count = 0;
                 let mut written_bytes = 0;
                 while written_bytes < n {
+                    if writen_count >= 10 {
+                        if wait_count < 3 {
+                            wait_count += 1;
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        } else {
+                            error!("failed to write after having tried {writen_count} times, written {written_bytes}/{n}");
+                            return Err(ProxyError::InternalError);
+                        }
+                    }
+
+                    writen_count += 1;
                     written_bytes +=
                         writer.write(&buffer[written_bytes..n]).await.map_err(|e| {
                             error!("write failed: {e}");
