@@ -19,7 +19,7 @@ num_cpus = "1.17"
 url = "2.5"
 regex = "1.11"
 notify = "6.1"
-rs-utilities = "0.4.2"
+rs-utilities = "0.4.3"
 # rs-utilities = { path = "../rs-utilities" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

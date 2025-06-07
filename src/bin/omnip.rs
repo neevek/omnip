@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};
-use log::error;
 use omnip::*;
 use rs_utilities::log_and_bail;
 use std::env;

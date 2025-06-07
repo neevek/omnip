@@ -15,7 +15,7 @@ use anyhow::{bail, Result};
 pub use api::Api;
 use byte_pool::{Block, BytePool};
 use lazy_static::lazy_static;
-use log::{error, warn};
+use log::warn;
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use quic::quic_client::QuicClient;
 pub use quic::quic_server::QuicServer;

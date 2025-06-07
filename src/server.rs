@@ -685,7 +685,7 @@ impl Server {
 
             if outbound_type == OutboundType::Direct {
                 let peer_addr = inbound_stream.peer_addr().map_err(|e| {
-                    debug!("unexpected error: {e}");
+                    error!("unexpected error: {e}");
                     ProxyError::InternalError
                 })?;
 
@@ -707,7 +707,7 @@ impl Server {
                             let resolved_ip = NetAddr::from_ip(ip, addr.port);
                             if resolved_ip.is_loopback() {
                                 let local_addr = inbound_stream.local_addr().map_err(|e| {
-                                    debug!("unexpected error: {e}");
+                                    error!("unexpected error: {e}");
                                     ProxyError::InternalError
                                 })?;
 
@@ -739,7 +739,7 @@ impl Server {
 
                     Host::IP(ip) => {
                         let local_addr = inbound_stream.local_addr().map_err(|e| {
-                            debug!("unexpected error: {e}");
+                            error!("unexpected error: {e}");
                             ProxyError::InternalError
                         })?;
 
@@ -857,12 +857,14 @@ impl Server {
     ) -> Result<ProxyTraffic, ProxyError> {
         stats_sender.send(ServerStats::NewConnection).await.ok();
 
-        let in_addr = inbound_stream
-            .peer_addr()
-            .map_err(|_| ProxyError::InternalError)?;
-        let out_addr = outbound_stream
-            .peer_addr()
-            .map_err(|_| ProxyError::InternalError)?;
+        let in_addr = inbound_stream.peer_addr().map_err(|e| {
+            error!("unexpected error: {e}");
+            ProxyError::InternalError
+        })?;
+        let out_addr = outbound_stream.peer_addr().map_err(|e| {
+            error!("unexpected error: {e}");
+            ProxyError::InternalError
+        })?;
 
         debug!("sess start: {in_addr:<20} ↔ {out_addr:<20}");
 
@@ -964,10 +966,10 @@ impl Server {
             Ok(0) => {
                 if !*eos_flag {
                     *eos_flag = true;
-                    writer
-                        .shutdown()
-                        .await
-                        .map_err(|_| ProxyError::InternalError)?;
+                    writer.shutdown().await.map_err(|e| {
+                        error!("shutdown failed: {e}");
+                        ProxyError::InternalError
+                    })?;
                 }
                 Ok(0)
             }
@@ -977,15 +979,19 @@ impl Server {
                 // the code cancellation safe
                 let mut written_bytes = 0;
                 while written_bytes < n {
-                    written_bytes += writer
-                        .write(&buffer[written_bytes..n])
-                        .await
-                        .map_err(|_| ProxyError::InternalError)?;
+                    written_bytes +=
+                        writer.write(&buffer[written_bytes..n]).await.map_err(|e| {
+                            error!("write failed: {e}");
+                            ProxyError::InternalError
+                        })?;
                 }
                 *out_bytes += n as u64;
                 Ok(n)
             }
-            Err(_) => Err(ProxyError::InternalError), // Connection mostly reset by peer
+            Err(e) => {
+                error!("read failed: {e}");
+                Err(ProxyError::InternalError)
+            } // Connection mostly reset by peer
         }
     }
 
