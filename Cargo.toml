@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["dylib", "lib"]
 
 [dependencies]
+console-subscriber = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.40", features = ["full"] }
 pretty_env_logger = "0.5"

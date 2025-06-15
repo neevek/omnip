@@ -147,6 +147,8 @@ impl Server {
     }
 
     pub fn run(self: &mut Arc<Self>) -> Result<()> {
+        std::env::set_var("TOKIO_CONSOLE_BIND", "0.0.0.0:6666");
+        console_subscriber::init();
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(self.config.workers)
