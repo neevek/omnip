@@ -27,8 +27,8 @@ serde_with = "3"
 lazy_static = "1.5"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
-# rstun = { path = "../rstun" }
-rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.7.1" }
+rstun = { path = "../rstun" }
+# rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.7.1" }
 hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"
@@ -36,6 +36,12 @@ mime_guess = "2.0"
 monolithica = { git = "https://github.com/neevek/monolithica" }
 base64 = "0.22"
 dashmap = "6"
+ipstack = "0.4.0"
+
+tun = { version = "0.7", features = ["async"] }
+etherparse = { version = "0.18", default-features = false, features = ["std"] }
+udp-stream = { version = "0.0", default-features = false }
+
 
 [dev-dependencies]
 jni = "0.21"

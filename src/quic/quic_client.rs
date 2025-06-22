@@ -1,7 +1,53 @@
 use crate::QuicClientConfig;
 use anyhow::Result;
-use rstun::{TunnelConfig, TunnelMode, Upstream, UpstreamType};
-use std::net::SocketAddr;
+use ipstack::IpStackTcpStream;
+use rstun::{AsyncStream, StreamReceiver, TunnelConfig, TunnelMode, Upstream, UpstreamType};
+use std::{
+    net::SocketAddr,
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tokio::io::{AsyncRead, AsyncWrite};
+
+pub struct RstunAsyncStream(pub IpStackTcpStream);
+
+impl AsyncRead for RstunAsyncStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for RstunAsyncStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.0).poll_shutdown(cx)
+    }
+}
+
+impl AsyncStream for RstunAsyncStream {
+    fn peer_addr(&self) -> std::io::Result<SocketAddr> {
+        Ok(self.0.peer_addr())
+    }
+}
 
 pub struct QuicClient {
     client: rstun::Client,
@@ -29,6 +75,14 @@ impl QuicClient {
 
     pub fn connect_and_serve_async(&mut self) {
         self.client.connect_and_serve_async()
+    }
+
+    pub fn connect_and_serve_async_with_stream_receiver(
+        &mut self,
+        stream_reciever: StreamReceiver<RstunAsyncStream>,
+    ) {
+        self.client
+            .connect_and_serve_async_with_stream_receiver(UpstreamType::Tcp, stream_reciever)
     }
 
     pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static + Send + Sync) {

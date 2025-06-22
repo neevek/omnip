@@ -18,6 +18,7 @@ use lazy_static::lazy_static;
 use log::warn;
 pub use proxy_rule_manager::ProxyRuleManager;
 pub use quic::quic_client::QuicClient;
+pub use quic::quic_client::RstunAsyncStream;
 pub use quic::quic_server::QuicServer;
 use rs_utilities::log_and_bail;
 use serde::{Deserialize, Serialize};

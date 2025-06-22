@@ -4,12 +4,130 @@ use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};
 use omnip::*;
 use rs_utilities::log_and_bail;
+use rstun::StreamRequest;
 use std::env;
+use tokio::sync::mpsc::channel;
 use url::Url;
 
 extern crate pretty_env_logger;
 
-fn main() -> Result<()> {
+use etherparse::Icmpv4Header;
+use ipstack::{IpNumber, IpStackStream};
+use std::net::{Ipv4Addr, SocketAddr};
+use tokio::{io::AsyncWriteExt, net::TcpStream};
+
+use udp_stream::UdpStream;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let log_filter = format!("omnip=debug,rstun=debug,rs_utilities=debug");
+    rs_utilities::LogHelper::init_logger("omnip", log_filter.as_str());
+
+    const MTU: u16 = 1500;
+    let ipv4 = Ipv4Addr::new(10, 0, 0, 1);
+    let netmask = Ipv4Addr::new(255, 255, 255, 0);
+    let mut config = tun::Configuration::default();
+    config.address(ipv4).netmask(netmask).mtu(MTU).up();
+
+    #[cfg(target_os = "linux")]
+    config.platform_config(|config| {
+        config.ensure_root_privileges(true);
+    });
+
+    #[cfg(target_os = "windows")]
+    config.platform_config(|config| {
+        config.device_guid(12324323423423434234_u128);
+    });
+
+    let mut ipstack_config = ipstack::IpStackConfig::default();
+    ipstack_config.mtu(MTU);
+    let mut ip_stack = ipstack::IpStack::new(ipstack_config, tun::create_as_async(&config)?);
+
+    let common_quic_config = CommonQuicConfig {
+        cert: "".to_string(),
+        key: "".to_string(),
+        password: "123".to_string(),
+        cipher: "".to_string(),
+        quic_timeout_ms: 10000,
+        retry_interval_ms: 10000,
+        workers: 2,
+        tcp_timeout_ms: 10000,
+        udp_timeout_ms: 10000,
+    };
+
+    let quic_client_config = QuicClientConfig {
+        server_addr: "192.168.50.5:9999".parse().unwrap(),
+        local_tcp_server_addr: None,
+        local_udp_server_addr: None,
+        common_cfg: common_quic_config,
+        dot_servers: vec![],
+        name_servers: vec![],
+    };
+
+    let mut client = QuicClient::new(quic_client_config);
+
+    let (sender, reciever) = channel(3);
+    client.connect_and_serve_async_with_stream_receiver(reciever);
+
+    log::info!(">>>>>> haha start");
+
+    while let Ok(stream) = ip_stack.accept().await {
+        match stream {
+            IpStackStream::Tcp(tcp) => {
+                log::info!(
+                    ">>>>>> new request:{} -> {}",
+                    tcp.local_addr(),
+                    tcp.peer_addr()
+                );
+                sender
+                    .send(rstun::StreamMessage::Request(StreamRequest {
+                        dst_addr: Some(tcp.peer_addr()),
+                        stream: RstunAsyncStream(tcp),
+                    }))
+                    .await
+                    .unwrap();
+                // let mut rhs = TcpStream::connect("1.1.1.1:80").await?;
+                // tokio::spawn(async move {
+                //     let _ = tokio::io::copy_bidirectional(&mut tcp, &mut rhs).await;
+                //     let _ = rhs.shutdown().await;
+                //     let _ = tcp.shutdown().await;
+                // });
+            }
+            IpStackStream::Udp(mut udp) => {
+                let addr: SocketAddr = "1.1.1.1:53".parse()?;
+                let mut rhs = UdpStream::connect(addr).await?;
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy_bidirectional(&mut udp, &mut rhs).await;
+                    rhs.shutdown();
+                    let _ = udp.shutdown().await;
+                });
+            }
+            IpStackStream::UnknownTransport(u) => {
+                if u.src_addr().is_ipv4() && u.ip_protocol() == IpNumber::ICMP {
+                    let (icmp_header, req_payload) = Icmpv4Header::from_slice(u.payload())?;
+                    if let etherparse::Icmpv4Type::EchoRequest(echo) = icmp_header.icmp_type {
+                        println!("ICMPv4 echo");
+                        let mut resp = Icmpv4Header::new(etherparse::Icmpv4Type::EchoReply(echo));
+                        resp.update_checksum(req_payload);
+                        let mut payload = resp.to_bytes().to_vec();
+                        payload.extend_from_slice(req_payload);
+                        u.send(payload)?;
+                    } else {
+                        println!("ICMPv4");
+                    }
+                    continue;
+                }
+                println!("unknown transport - Ip Protocol {:?}", u.ip_protocol());
+            }
+            IpStackStream::UnknownNetwork(pkt) => {
+                println!("unknown transport - {} bytes", pkt.len());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn main2() -> Result<()> {
     let args = parse_args()?;
     if args.decode_base64 || print_args_as_base64(&args) {
         return Ok(());
