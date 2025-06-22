@@ -14,6 +14,7 @@ use crate::{
     ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig, BUFFER_POOL,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use byte_pool::Block;
 use log::{debug, error, info, warn};
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -684,11 +685,7 @@ impl Server {
             }
 
             if outbound_type == OutboundType::Direct {
-                let peer_addr = inbound_stream.peer_addr().map_err(|e| {
-                    error!("unexpected error: {e}");
-                    ProxyError::InternalError
-                })?;
-
+                let peer_addr = utils::get_peer_addr_for_debug_build(&inbound_stream)?;
                 debug!("serve request directly: {addr} from {peer_addr}",);
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
@@ -781,7 +778,7 @@ impl Server {
                 None => {
                     warn!(
                         "failed to create outbound stream for: {addr} from {:?}",
-                        inbound_stream.peer_addr()
+                        utils::get_peer_addr_for_debug_build(&inbound_stream)
                     );
                     proxy_handler
                         .handle_outbound_failure(&mut inbound_stream)
@@ -801,13 +798,16 @@ impl Server {
     ) -> Result<TcpStream, ProxyError> {
         match dashboard_addr {
             Some(addr) => {
-                debug!("dashboard request: {:?}", inbound_stream.peer_addr());
+                debug!(
+                    "dashboard request: {:?}",
+                    utils::get_peer_addr_for_debug_build(inbound_stream)
+                );
                 Self::create_tcp_stream(addr, tcp_nodelay).await
             }
             None => {
                 log::warn!(
                     "request routing to the proxy server itself is rejected: {:?}",
-                    inbound_stream.peer_addr()
+                    utils::get_peer_addr_for_debug_build(inbound_stream)
                 );
                 Err(ProxyError::BadRequest)
             }
@@ -855,18 +855,11 @@ impl Server {
         stats_sender: &Sender<ServerStats>,
         tcp_timeout_ms: u64,
     ) -> Result<ProxyTraffic, ProxyError> {
-        stats_sender.send(ServerStats::NewConnection).await.ok();
-
-        let in_addr = inbound_stream.peer_addr().map_err(|e| {
-            error!("unexpected error: {e}");
-            ProxyError::InternalError
-        })?;
-        let out_addr = outbound_stream.peer_addr().map_err(|e| {
-            error!("unexpected error: {e}");
-            ProxyError::InternalError
-        })?;
-
+        let in_addr = utils::get_peer_addr_for_debug_build(&inbound_stream)?;
+        let out_addr = utils::get_peer_addr_for_debug_build(&outbound_stream)?;
         debug!("sess start: {in_addr:<20} ↔ {out_addr:<20}");
+
+        stats_sender.send(ServerStats::NewConnection).await.ok();
 
         const BUFFER_SIZE: usize = 8192;
         let mut inbound_buffer = BUFFER_POOL.alloc_and_fill(BUFFER_SIZE);
@@ -929,14 +922,20 @@ impl Server {
                     }
                 }
                 Err(ProxyError::Timeout) => {
-                    debug!("timeout   : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
+                    #[cfg(debug_assertions)]
+                    {
+                        debug!("timeout   : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
+                    }
                     break;
                 }
                 Err(_) => break,
                 Ok(_) => {}
             }
         }
-        debug!("sess end  : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
+        #[cfg(debug_assertions)]
+        {
+            debug!("sess end  : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
+        }
 
         stats_sender
             .send(ServerStats::Traffic(ProxyTraffic { tx_bytes, rx_bytes }))
@@ -950,7 +949,7 @@ impl Server {
     async fn transfer_data_with_timeout<R, W>(
         reader: &mut R,
         writer: &mut W,
-        buffer: &mut [u8],
+        buffer: &mut Block<'_>,
         out_bytes: &mut u64,
         eos_flag: &mut bool,
         tcp_timeout_ms: u64,

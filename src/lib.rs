@@ -47,6 +47,7 @@ pub enum ProxyError {
     ConnectionRefused,
     IPv6NotSupported, // not supported by Socks4
     InternalError,
+    GetPeerAddrFailed,
     BadRequest,
     Timeout,
     PayloadTooLarge,
