@@ -1,22 +1,33 @@
 use anyhow::{bail, Context, Result};
 use base64::prelude::*;
+use byte_pool::BytePool;
 use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};
+use dashmap::DashMap;
 use omnip::*;
 use rs_utilities::log_and_bail;
-use rstun::StreamRequest;
+use rstun::{StreamRequest, UdpMessage, UdpPacket, UDP_PACKET_SIZE};
+use std::borrow::BorrowMut;
 use std::env;
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::channel;
+use tokio::sync::Mutex;
 use url::Url;
 
 extern crate pretty_env_logger;
 
 use etherparse::Icmpv4Header;
-use ipstack::{IpNumber, IpStackStream};
+use ipstack::{IpNumber, IpStackStream, IpStackUdpStream};
 use std::net::{Ipv4Addr, SocketAddr};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
+use lazy_static::lazy_static;
 use udp_stream::UdpStream;
+
+lazy_static! {
+    static ref BUFFER_POOL: BytePool::<Vec<u8>> = BytePool::<Vec<u8>>::new();
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,9 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const MTU: u16 = 1500;
     let ipv4 = Ipv4Addr::new(10, 0, 0, 1);
+    let dst = Ipv4Addr::new(10, 0, 0, 5);
     let netmask = Ipv4Addr::new(255, 255, 255, 0);
     let mut config = tun::Configuration::default();
-    config.address(ipv4).netmask(netmask).mtu(MTU).up();
+    config
+        .address(ipv4)
+        .destination(dst)
+        .netmask(netmask)
+        .mtu(MTU)
+        .up();
 
     #[cfg(target_os = "linux")]
     config.platform_config(|config| {
@@ -66,20 +83,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut client = QuicClient::new(quic_client_config);
 
-    let (sender, reciever) = channel(3);
-    client.connect_and_serve_async_with_stream_receiver(reciever);
+    let (tcp_sender, tcp_reciever) = channel(3);
+    client.connect_and_serve_tcp_async(tcp_reciever);
+
+    let udp_map: DashMap<SocketAddr, Arc<Mutex<IpStackUdpStream>>> = DashMap::new();
+    let (in_udp_sender, mut in_udp_receiver) = channel(3);
+    let (out_udp_sender, out_udp_receiver) = channel(3);
+    client.connect_and_serve_udp_async((in_udp_sender, out_udp_receiver));
+
+    let m = udp_map.clone();
+    tokio::spawn(async move {
+        loop {
+            match in_udp_receiver.recv().await {
+                Some(UdpMessage::Packet(p)) => {
+                    let m = m.clone();
+                    let udp = m.remove(&p.local_addr);
+                    if let Some(udp) = udp {
+                        udp.1.lock().await.write_all(&p.payload).await.ok();
+                        // udp_map.insert(p.local_addr, udp.1);
+                    }
+                }
+                Some(UdpMessage::Quit) => {
+                    log::info!("udp server is requested to quit");
+                    break;
+                }
+                None => {
+                    // all senders quit
+                    log::info!("udp server quit");
+                    break;
+                }
+            }
+        }
+    });
 
     log::info!(">>>>>> haha start");
 
     while let Ok(stream) = ip_stack.accept().await {
         match stream {
             IpStackStream::Tcp(tcp) => {
-                log::info!(
-                    ">>>>>> new request:{} -> {}",
-                    tcp.local_addr(),
-                    tcp.peer_addr()
-                );
-                sender
+                // log::info!(
+                //     ">>>>>> new request:{} -> {}",
+                //     tcp.local_addr(),
+                //     tcp.peer_addr()
+                // );
+                tcp_sender
                     .send(rstun::StreamMessage::Request(StreamRequest {
                         dst_addr: Some(tcp.peer_addr()),
                         stream: RstunAsyncStream(tcp),
@@ -94,13 +141,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // });
             }
             IpStackStream::Udp(mut udp) => {
-                let addr: SocketAddr = "1.1.1.1:53".parse()?;
-                let mut rhs = UdpStream::connect(addr).await?;
-                tokio::spawn(async move {
-                    let _ = tokio::io::copy_bidirectional(&mut udp, &mut rhs).await;
-                    rhs.shutdown();
-                    let _ = udp.shutdown().await;
-                });
+                log::info!(">>>>>>>> udp: {} -> {}", udp.local_addr(), udp.peer_addr());
+                let mut payload = BUFFER_POOL.alloc_and_fill(UDP_PACKET_SIZE);
+                if let Ok(size) = udp.read(&mut payload).await {
+                    if size > 0 {
+                        let udp_packet = UdpPacket {
+                            payload,
+                            local_addr: udp.local_addr(),
+                            peer_addr: Some(udp.peer_addr()),
+                        };
+                        out_udp_sender
+                            .send(rstun::UdpMessage::Packet(udp_packet))
+                            .await
+                            .ok();
+                        udp_map.insert(udp.local_addr(), Arc::new(Mutex::new(udp)));
+                    }
+                }
+
+                // let addr: SocketAddr = "1.1.1.1:53".parse()?;
+                // let mut rhs = UdpStream::connect(addr).await?;
+                // tokio::spawn(async move {
+                //     let _ = tokio::io::copy_bidirectional(&mut udp, &mut rhs).await;
+                //     rhs.shutdown();
+                //     let _ = udp.shutdown().await;
+                // });
             }
             IpStackStream::UnknownTransport(u) => {
                 if u.src_addr().is_ipv4() && u.ip_protocol() == IpNumber::ICMP {

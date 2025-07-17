@@ -1,7 +1,10 @@
 use crate::QuicClientConfig;
 use anyhow::Result;
 use ipstack::IpStackTcpStream;
-use rstun::{AsyncStream, StreamReceiver, TunnelConfig, TunnelMode, Upstream, UpstreamType};
+use rstun::{
+    AsyncStream, StreamReceiver, TunnelConfig, TunnelMode, UdpReceiver, UdpSender, Upstream,
+    UpstreamType,
+};
 use std::{
     net::SocketAddr,
     pin::Pin,
@@ -77,12 +80,15 @@ impl QuicClient {
         self.client.connect_and_serve_async()
     }
 
-    pub fn connect_and_serve_async_with_stream_receiver(
+    pub fn connect_and_serve_tcp_async(
         &mut self,
         stream_reciever: StreamReceiver<RstunAsyncStream>,
     ) {
-        self.client
-            .connect_and_serve_async_with_stream_receiver(UpstreamType::Tcp, stream_reciever)
+        self.client.connect_and_serve_tcp_async(stream_reciever)
+    }
+
+    pub fn connect_and_serve_udp_async(&mut self, ch: (UdpSender, UdpReceiver)) {
+        self.client.connect_and_serve_udp_async(ch);
     }
 
     pub fn set_on_info_listener(&mut self, callback: impl FnMut(&str) + 'static + Send + Sync) {
