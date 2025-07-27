@@ -13,7 +13,7 @@ use crate::{
     local_socket_addr, utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError,
     ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig, BUFFER_POOL,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use byte_pool::Block;
 use log::{debug, error, info, warn};
 use notify::event::ModifyKind;

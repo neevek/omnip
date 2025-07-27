@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use base64::prelude::*;
 use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};

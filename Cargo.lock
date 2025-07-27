@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",
@@ -1706,9 +1706,9 @@ dependencies = [
 
 [[package]]
 name = "rs-utilities"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a81d5d7eb4feec0b1106cfe43ba8c42528294f16b7249513e703287d321c2431"
+checksum = "e6a4aedf542062df4d26745da6d437087661e242dfcb9e6620f903ec977b0d20"
 dependencies = [
  "android_logger 0.13.3",
  "anyhow",
@@ -1724,8 +1724,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.7.1"
-source = "git+https://github.com/neevek/rstun?tag=release%2F0.7.1#afd51c5af35fd1fd4ba0101d9037edf73e6b3197"
+version = "0.7.2"
+source = "git+https://github.com/neevek/rstun?tag=release%2F0.7.2#396c5b66f8aa037e9e975d4f2eec80e85236b015"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",
