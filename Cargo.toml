@@ -1,6 +1,6 @@
 [package]
 name = "omnip"
-version = "0.7.3"
+version = "0.7.5"
 edition = "2021"
 
 [lib]
@@ -8,7 +8,7 @@ crate-type = ["dylib", "lib"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 pretty_env_logger = "0.5"
 log = "0.4"
 chrono = "0.4"
@@ -28,7 +28,7 @@ lazy_static = "1.5"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
 # rstun = { path = "../rstun" }
-rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.7.1" }
+rstun = { git = "https://github.com/neevek/rstun", tag = "v0.7.4" }
 hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"

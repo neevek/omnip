@@ -827,7 +827,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -1024,12 +1024,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d93587f37623a1a17d94ef2bc9ada592f5465fe7732084ab7beefabe5c77c0c4"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "ipconfig"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b58db92f96b720de98181bbbe63c831e87005ab460c1bf306eb2622b4707997f"
 dependencies = [
- "socket2",
+ "socket2 0.5.10",
  "widestring",
  "windows-sys 0.48.0",
  "winreg",
@@ -1357,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.7.3"
+version = "0.7.5"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",
@@ -1505,17 +1516,16 @@ dependencies = [
 [[package]]
 name = "quinn"
 version = "0.11.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "626214629cda6781b6dc1d316ba307189c85ba657213ce642d9c77670f8202c8"
+source = "git+https://github.com/neevek/quinn?branch=fix-rebind#4bfeba1740df48b460ce36ac35a8a2d5f0334374"
 dependencies = [
  "bytes",
  "cfg_aliases",
  "pin-project-lite",
- "quinn-proto",
+ "quinn-proto 0.11.12 (git+https://github.com/neevek/quinn?branch=fix-rebind)",
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.27",
- "socket2",
+ "socket2 0.5.10",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -1537,6 +1547,27 @@ dependencies = [
  "rustc-hash",
  "rustls 0.23.27",
  "rustls-pki-types",
+ "slab",
+ "thiserror 2.0.12",
+ "tinyvec",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
+name = "quinn-proto"
+version = "0.11.12"
+source = "git+https://github.com/neevek/quinn?branch=fix-rebind#4bfeba1740df48b460ce36ac35a8a2d5f0334374"
+dependencies = [
+ "bytes",
+ "fastbloom",
+ "getrandom 0.3.3",
+ "lru-slab",
+ "rand 0.9.1",
+ "ring",
+ "rustc-hash",
+ "rustls 0.23.27",
+ "rustls-pki-types",
  "rustls-platform-verifier 0.5.3",
  "slab",
  "thiserror 2.0.12",
@@ -1548,13 +1579,12 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee4e529991f949c5e25755532370b8af5d114acae52326361d68d47af64aa842"
+source = "git+https://github.com/neevek/quinn?branch=fix-rebind#4bfeba1740df48b460ce36ac35a8a2d5f0334374"
 dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -1635,9 +1665,9 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
-version = "0.13.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+checksum = "0068c5b3cab1d4e271e0bb6539c87563c43411cad90b057b15c79958fbeb41f7"
 dependencies = [
  "pem",
  "ring",
@@ -1706,9 +1736,9 @@ dependencies = [
 
 [[package]]
 name = "rs-utilities"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a81d5d7eb4feec0b1106cfe43ba8c42528294f16b7249513e703287d321c2431"
+checksum = "e6a4aedf542062df4d26745da6d437087661e242dfcb9e6620f903ec977b0d20"
 dependencies = [
  "android_logger 0.13.3",
  "anyhow",
@@ -1724,8 +1754,8 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.7.1"
-source = "git+https://github.com/neevek/rstun?tag=release%2F0.7.1#afd51c5af35fd1fd4ba0101d9037edf73e6b3197"
+version = "0.7.4"
+source = "git+https://github.com/neevek/rstun?tag=v0.7.4#55377aa83c2d8a12f8ccb5f66b429e61d0a1e241"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",
@@ -1746,7 +1776,7 @@ dependencies = [
  "pin-utils",
  "pretty_env_logger",
  "quinn",
- "quinn-proto",
+ "quinn-proto 0.11.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "rcgen",
  "ring",
  "rs-utilities",
@@ -2102,6 +2132,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2248,20 +2288,22 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.45.1"
+version = "1.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75ef51a33ef1da925cea3e4eb122833cb377c61439ca401b770f54902b806779"
+checksum = "89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038"
 dependencies = [
  "backtrace",
  "bytes",
+ "io-uring",
  "libc",
  "mio 1.0.4",
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2",
+ "slab",
+ "socket2 0.6.0",
  "tokio-macros",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -132,6 +132,9 @@ Options:
   -R, --retry-interval-ms <RETRY_INTERVAL_MS>
           Applicable only for quic protocol as upstream
           Max idle timeout for the QUIC connections [default: 5000]
+      --hop-interval-ms <HOP_INTERVAL_MS>
+          Applicable only for quic protocol as upstream
+          Interval between hops in the QUIC connections [default: 180000]
       --tcp-nodelay
           Set TCP_NODELAY
   -w, --watch-proxy-rules-change

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use base64::prelude::*;
 use clap::builder::TypedValueParser as _;
 use clap::{builder::PossibleValuesParser, Parser};
@@ -43,6 +43,7 @@ fn main() -> Result<()> {
         tcp_timeout_ms: args.tcp_timeout_ms,
         udp_timeout_ms: args.udp_timeout_ms,
         retry_interval_ms: args.retry_interval_ms,
+        hop_interval_ms: args.hop_interval_ms,
         workers: args.threads,
     };
 
@@ -173,6 +174,11 @@ struct OmnipArgs {
     /// Max idle timeout for the QUIC connections
     #[arg(short = 'R', long, verbatim_doc_comment, default_value = "5000")]
     retry_interval_ms: u64,
+
+    /// Applicable only for quic protocol as upstream
+    /// Interval between hops in the QUIC connections
+    #[arg(long, verbatim_doc_comment, default_value = "0")]
+    hop_interval_ms: u64,
 
     /// Set TCP_NODELAY
     #[arg(long, action)]

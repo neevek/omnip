@@ -84,6 +84,7 @@ impl QuicClient {
         config.tcp_timeout_ms = quic_client_config.common_cfg.tcp_timeout_ms;
         config.udp_timeout_ms = quic_client_config.common_cfg.udp_timeout_ms;
         config.wait_before_retry_ms = quic_client_config.common_cfg.retry_interval_ms;
+        config.hop_interval_ms = quic_client_config.common_cfg.hop_interval_ms;
         config.workers = quic_client_config.common_cfg.workers;
         config.dot_servers = quic_client_config.dot_servers.clone();
         config.dns_servers = quic_client_config.name_servers.clone();

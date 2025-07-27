@@ -8,6 +8,7 @@ function QuicTunnel() {
   const [certPath, setCertPath] = useState("");
   const [idleTimeout, setIdleTimeout] = useState(120000);
   const [retryInterval, setRetryInterval] = useState(5000);
+  const [hopInterval, setHopInterval] = useState(5000);
   const [cipher, setCipher] = useState("");
   const [tunnelState, setTunnelState] = useState("NotConnected");
   const [messages, setMessages] = useState<MessageProps[]>([]);
@@ -25,6 +26,7 @@ function QuicTunnel() {
       setCertPath(serverConfig.cert);
       setIdleTimeout(serverConfig.idle_timeout);
       setRetryInterval(serverConfig.retry_interval);
+      setHopInterval(serverConfig.hop_interval);
       setCipher(serverConfig.cipher);
     }
   };
@@ -46,6 +48,7 @@ function QuicTunnel() {
       password,
       idle_timeout: idleTimeout,
       retry_interval: retryInterval,
+      hop_interval: hopInterval,
     };
 
     postData("/api/update_quic_tunnel_config", config)
@@ -72,6 +75,7 @@ function QuicTunnel() {
         <TextField id="cert-path" label="Path to SSL Certificate" variant="filled" value={certPath} onChange={(e) => setCertPath(e.target.value)} helperText="leave this blank if connecting to the server using domain name"/>
         <TextField id="idle-timeout" label="Idle Timeout (ms)" type='number' variant="filled" value={idleTimeout} onChange={(e) => setIdleTimeout(parseInt(e.target.value))}/>
         <TextField id="retry-interval" label="Retry Interval (ms)" type='number' variant="filled" value={retryInterval} onChange={(e) => setRetryInterval(parseInt(e.target.value))}/>
+        <TextField id="hop-interval" label="Hop Interval (ms)" type='number' variant="filled" value={hopInterval} onChange={(e) => setHopInterval(parseInt(e.target.value))}/>
 
         <TextField
           value={cipher}

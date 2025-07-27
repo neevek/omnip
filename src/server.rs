@@ -13,7 +13,7 @@ use crate::{
     local_socket_addr, utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError,
     ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig, BUFFER_POOL,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use byte_pool::Block;
 use log::{debug, error, info, warn};
 use notify::event::ModifyKind;
@@ -1222,6 +1222,7 @@ impl Api for Server {
             password: cfg.password.clone(),
             idle_timeout: cfg.quic_timeout_ms,
             retry_interval: cfg.retry_interval_ms,
+            hop_interval: cfg.hop_interval_ms,
         }
     }
 
@@ -1268,6 +1269,7 @@ impl Api for Server {
         base_common_quic_config.password = config.password;
         base_common_quic_config.quic_timeout_ms = config.idle_timeout;
         base_common_quic_config.retry_interval_ms = config.retry_interval;
+        base_common_quic_config.hop_interval_ms = config.hop_interval;
         let upstream_addr = NetAddr::from_str(config.upstream_addr.as_str())?;
         self.start_quic_client(upstream_addr, base_common_quic_config)
             .await

@@ -360,6 +360,7 @@ pub struct CommonQuicConfig {
     pub tcp_timeout_ms: u64,
     pub udp_timeout_ms: u64,
     pub retry_interval_ms: u64,
+    pub hop_interval_ms: u64,
     pub workers: usize,
 }
 
@@ -604,6 +605,7 @@ pub mod android {
         jpassword: JString,
         jquicTimeoutMs: jint,
         jretryIntervalMs: jint,
+        jhopIntervalMs: jint,
         jworkers: jint,
         jtcpNoDelay: jboolean,
         jtcpTimeoutMs: jlong,
@@ -649,6 +651,7 @@ pub mod android {
             cipher,
             quic_timeout_ms: jquicTimeoutMs as u64,
             retry_interval_ms: jretryIntervalMs as u64,
+            hop_interval_ms: jhopIntervalMs as u64,
             workers: jworkers as usize,
             tcp_timeout_ms: jtcpTimeoutMs as u64,
             udp_timeout_ms: judpTimeoutMs as u64,

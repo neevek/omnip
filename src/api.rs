@@ -27,6 +27,7 @@ pub struct QuicTunnelConfig {
     pub password: String,
     pub idle_timeout: u64,
     pub retry_interval: u64,
+    pub hop_interval: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
