@@ -27,8 +27,8 @@ serde_with = "3"
 lazy_static = "1.5"
 async-trait = "0.1"
 byte-pool = { git = "https://github.com/neevek/byte-pool" }
-# rstun = { path = "../rstun" }
-rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.7.2" }
+rstun = { path = "../rstun" }
+# rstun = { git = "https://github.com/neevek/rstun", tag = "release/0.7.2" }
 hyper = { version = "0.14", features = ["full"]}
 http = "0.2"
 http-body = "0.4"

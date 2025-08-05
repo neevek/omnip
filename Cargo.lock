@@ -1724,8 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "rstun"
-version = "0.7.2"
-source = "git+https://github.com/neevek/rstun?tag=release%2F0.7.2#396c5b66f8aa037e9e975d4f2eec80e85236b015"
+version = "0.7.3"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",
