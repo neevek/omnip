@@ -30,6 +30,11 @@ impl HttpReq {
         loop {
             let mut tmp_buffer = [0u8; 256];
             let len = utils::read_from_stream(outbound_stream, &mut tmp_buffer).await?;
+            if len == 0 {
+                log::error!("failed to read request after retrying for 10 times");
+                return Err(ProxyError::BadRequest);
+            }
+
             buffer.extend_from_slice(&tmp_buffer[..len]);
             let len = buffer.len();
             if len > 4 {

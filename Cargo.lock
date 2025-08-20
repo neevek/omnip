@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "omnip"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "android_logger 0.15.0",
  "anyhow",

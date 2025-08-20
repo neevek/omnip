@@ -86,8 +86,13 @@ impl SocksReq {
                 _ => {}
             }
 
-            let read_len = utils::read_from_stream(outbound_stream, &mut buf).await?;
-            if !resp_parser.advance(&buf[..read_len]) {
+            let len = utils::read_from_stream(outbound_stream, &mut buf).await?;
+            if len == 0 {
+                log::error!("failed to read request after retrying for 10 times");
+                return Err(ProxyError::BadRequest);
+            }
+
+            if !resp_parser.advance(&buf[..len]) {
                 error!(
                     "connect failed: {:?}, dst_addr: {}",
                     resp_parser.state(),
