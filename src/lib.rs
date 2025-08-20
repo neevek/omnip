@@ -27,6 +27,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use url::Url;
 
+const UNSPECIFIED_V4: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+
 const INTERNAL_DOMAIN_SURRFIX: [&str; 6] = [
     ".home",
     ".lan",

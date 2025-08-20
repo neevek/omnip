@@ -12,6 +12,7 @@ use crate::udp::udp_server::UdpServer;
 use crate::{
     local_socket_addr, utils, CommonQuicConfig, Config, Host, NetAddr, ProtoType, ProxyError,
     ProxyRuleManager, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig, BUFFER_POOL,
+    UNSPECIFIED_V4,
 };
 use anyhow::{anyhow, Context, Result};
 use byte_pool::Block;
@@ -670,7 +671,7 @@ impl Server {
                         };
 
                         debug!(
-                            "forward to {outbound_type:?}, {addr} → {}",
+                            "forward to {outbound_type:?}, {addr} →  {}",
                             upstream.unwrap()
                         );
 
@@ -685,7 +686,7 @@ impl Server {
             }
 
             if outbound_type == OutboundType::Direct {
-                let peer_addr = utils::get_peer_addr_for_debug_build(&inbound_stream)?;
+                let peer_addr = utils::get_peer_addr(&inbound_stream)?;
                 debug!("serve request directly: {addr} from {peer_addr}",);
                 outbound_stream = match &addr.host {
                     Host::Domain(domain) => {
@@ -778,7 +779,7 @@ impl Server {
                 None => {
                     warn!(
                         "failed to create outbound stream for: {addr} from {:?}",
-                        utils::get_peer_addr_for_debug_build(&inbound_stream)
+                        utils::get_peer_addr(&inbound_stream)
                     );
                     proxy_handler
                         .handle_outbound_failure(&mut inbound_stream)
@@ -800,14 +801,14 @@ impl Server {
             Some(addr) => {
                 debug!(
                     "dashboard request: {:?}",
-                    utils::get_peer_addr_for_debug_build(inbound_stream)
+                    utils::get_peer_addr(inbound_stream)
                 );
                 Self::create_tcp_stream(addr, tcp_nodelay).await
             }
             None => {
                 log::warn!(
                     "request routing to the proxy server itself is rejected: {:?}",
-                    utils::get_peer_addr_for_debug_build(inbound_stream)
+                    utils::get_peer_addr(inbound_stream)
                 );
                 Err(ProxyError::BadRequest)
             }
@@ -855,9 +856,9 @@ impl Server {
         stats_sender: &Sender<ServerStats>,
         tcp_timeout_ms: u64,
     ) -> Result<ProxyTraffic, ProxyError> {
-        let in_addr = utils::get_peer_addr_for_debug_build(&inbound_stream)?;
-        let out_addr = utils::get_peer_addr_for_debug_build(&outbound_stream)?;
-        debug!("sess start: {in_addr:<20} ↔ {out_addr:<20}");
+        let in_addr = utils::get_peer_addr(&inbound_stream).unwrap_or(UNSPECIFIED_V4);
+        let out_addr = utils::get_peer_addr(&outbound_stream).unwrap_or(UNSPECIFIED_V4);
+        debug!("sess start: {in_addr} ↔  {out_addr}");
 
         stats_sender.send(ServerStats::NewConnection).await.ok();
 
@@ -920,22 +921,19 @@ impl Server {
                     if inbound_stream_eos && outbound_stream_eos {
                         break;
                     }
+                    // When we get 0 bytes, it means one stream reached EOS.
+                    // Add a small delay to prevent tight looping when there's no data.
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                 }
                 Err(ProxyError::Timeout) => {
-                    #[cfg(debug_assertions)]
-                    {
-                        debug!("timeout   : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
-                    }
+                    debug!("   timeout: {in_addr} ↔  {out_addr} | ⟳ {loop_count} | ↑ {tx_bytes} ↓ {rx_bytes}");
                     break;
                 }
                 Err(_) => break,
                 Ok(_) => {}
             }
         }
-        #[cfg(debug_assertions)]
-        {
-            debug!("sess end  : {in_addr:<20} ↔ {out_addr:<20} | ⟳ {loop_count:<8}| ↑ {tx_bytes:<10} ↓ {rx_bytes:<10}");
-        }
+        debug!("  sess end: {in_addr} ↔  {out_addr} | ⟳ {loop_count} | ↑ {tx_bytes} ↓ {rx_bytes}");
 
         stats_sender
             .send(ServerStats::Traffic(ProxyTraffic { tx_bytes, rx_bytes }))
